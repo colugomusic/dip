@@ -40,6 +40,9 @@ target_sources(dip PRIVATE
 	src/const-strings.hpp
 	src/context.hpp
 	src/os.hpp
+	src/pmr-format.hpp
+	src/requirements.hpp
+	src/string-util.hpp
 	src/main.cpp
 	$<${is_linux}:src/os-lin.cpp>
 	$<${is_macos}:src/os-mac.cpp>

@@ -1,6 +1,11 @@
 CompileFlags:
   CompilationDatabase: z:/dv/_bld/dip-ninja-cl-dbg
-  Add: [-Wunused-variable, -Wunused-parameter, -Wunused-function]
+  Add:
+    - -IZ:/dv/dip/src/extern
+    - -IZ:/dv/dip/src/extern/tiny-process-library
+    - -Wunused-variable
+    - -Wunused-parameter
+    - -Wunused-function
 
 Diagnostics:
   ClangTidy:

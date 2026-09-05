@@ -5,7 +5,7 @@ namespace dip {
 static constexpr auto PROGRAM_NAME           = "dip";
 static constexpr auto PROGRAM_VERSION        = "1.0.0";
 static constexpr auto ARG_CACHE_NAME_SHORT   = "-c";
-static constexpr auto ARG_CACHE_NAME_LONG    = "-c";
+static constexpr auto ARG_CACHE_NAME_LONG    = "--cache";
 static constexpr auto ARG_CACHE_HELP         = "Where to store source files and build dependencies";
 static constexpr auto ARG_ROOT_NAME_SHORT    = "-r";
 static constexpr auto ARG_ROOT_NAME_LONG     = "--root";
