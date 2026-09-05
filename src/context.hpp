@@ -7,9 +7,10 @@
 namespace dip {
 
 struct print_options {
-	bool errors   = true;
-	bool warnings = true;
-	bool info     = true;
+	bool dep_tasks = true;
+	bool errors    = true;
+	bool warnings  = true;
+	bool info      = true;
 };
 
 struct context {

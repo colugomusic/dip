@@ -7,6 +7,7 @@
 namespace dip {
 
 struct arg_project_dir  { std::filesystem::path v; };
+struct arg_reacquire    { std::pmr::vector<std::pmr::string> v; };
 struct arg_track        { std::pmr::vector<std::pmr::string> v; };
 struct arg_cache        { std::optional<std::filesystem::path> v; };
 struct arg_root         { std::optional<std::filesystem::path> v; };
@@ -21,6 +22,7 @@ struct args {
 	arg_cache cache;
 	arg_root root;
 	arg_project_dir project_dir;
+	arg_reacquire reacquire;
 	arg_track track;
 	arg_install_self install_self;
 	arg_verbose verbose;
@@ -87,6 +89,15 @@ auto get_arg(const context* ctx, arg_track, const argparse::ArgumentParser& pars
 }
 
 [[nodiscard]]
+auto get_arg(const context* ctx, arg_reacquire, const argparse::ArgumentParser& parser) -> arg_reacquire {
+	if (parser.is_used(ARG_REACQUIRE_NAME_LONG)) {
+		const auto value = parser.get<std::string>(ARG_REACQUIRE_NAME_LONG);
+		return arg_reacquire{ split_csv(ctx, value) };
+	}
+	return {};
+}
+
+[[nodiscard]]
 auto get_arg(const context*, arg_quiet, const argparse::ArgumentParser& parser) -> arg_quiet {
     return {parser.get<bool>(ARG_QUIET_NAME_LONG)};
 }
@@ -118,6 +129,10 @@ auto get_args(const context* ctx, int argc, const char* argv[]) -> args {
 		.help(ARG_TRACK_HELP)
 		;
 	arg_parser
+		.add_argument(ARG_REACQUIRE_NAME_LONG)
+		.help(ARG_REACQUIRE_HELP)
+		;
+	arg_parser
 		.add_argument(ARG_PROJECT_NAME_SHORT, ARG_PROJECT_NAME_LONG)
 		.default_value(ctx->cwd.string())
 		.help(ARG_PROJECT_HELP)
@@ -145,6 +160,7 @@ auto get_args(const context* ctx, int argc, const char* argv[]) -> args {
 		.cache       = get_arg(ctx, arg_cache{}, arg_parser),
 		.root        = get_arg(ctx, arg_root{}, arg_parser),
 		.project_dir = get_arg(ctx, arg_project_dir{}, arg_parser),
+		.reacquire   = get_arg(ctx, arg_reacquire{}, arg_parser),
 		.track       = get_arg(ctx, arg_track{}, arg_parser),
 		.verbose     = get_arg(ctx, arg_verbose{}, arg_parser),
 		.quiet       = get_arg(ctx, arg_quiet{}, arg_parser),
