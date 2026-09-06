@@ -37,13 +37,22 @@ target_sources(tiny-process-library INTERFACE
 )
 target_sources(dip PRIVATE
 	src/args.hpp
+	src/cmake.hpp
 	src/const-strings.hpp
 	src/context.hpp
+	src/dep.hpp
+	src/dirs.hpp
+	src/fs.hpp
+	src/git.hpp
+	src/list-util.hpp
+	src/main.cpp
 	src/os.hpp
 	src/pmr-format.hpp
+	src/proc.hpp
+	src/progs.hpp
 	src/requirements.hpp
 	src/string-util.hpp
-	src/main.cpp
+	src/yaml.hpp
 	$<${is_linux}:src/os-lin.cpp>
 	$<${is_macos}:src/os-mac.cpp>
 	$<${is_windows}:src/os-win.cpp>

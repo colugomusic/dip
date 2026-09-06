@@ -8,6 +8,7 @@ namespace dip {
 
 struct print_options {
 	bool dep_tasks = true;
+	bool detail    = false;
 	bool errors    = true;
 	bool warnings  = true;
 	bool info      = true;

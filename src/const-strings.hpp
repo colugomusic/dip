@@ -4,6 +4,8 @@ namespace dip {
 
 static constexpr auto PROGRAM_NAME                   = "dip";
 static constexpr auto PROGRAM_VERSION                = "1.0.0";
+static constexpr auto ARG_CFG_NAME_LONG              = "--cfg";
+static constexpr auto ARG_CFG_HELP                   = "Specify the configs to install. Config names refer to those set up in the settings.yml. Use `--cfg without args to install all configs, or specify names separated by commas, e.g. `--cfg = dbg,rel`.";
 static constexpr auto ARG_CACHE_NAME_SHORT           = "-c";
 static constexpr auto ARG_CACHE_NAME_LONG            = "--cache";
 static constexpr auto ARG_CACHE_HELP                 = "Where to store source files and build dependencies";
@@ -17,7 +19,7 @@ static constexpr auto ARG_STFU_NAME_LONG             = "--stfu";
 static constexpr auto ARG_STFU_HELP                  = "Don't print anything.";
 static constexpr auto ARG_PROJECT_NAME_SHORT         = "-p";
 static constexpr auto ARG_PROJECT_NAME_LONG          = "--project";
-static constexpr auto ARG_PROJECT_HELP               = "Path to the project you want to install dependencies for.";
+static constexpr auto ARG_PROJECT_HELP               = "Path to the project you want to install dependencies for. If not specified, the current working directory is assumed to be the project.";
 static constexpr auto ARG_REACQUIRE_NAME_LONG        = "--reacquire";
 static constexpr auto ARG_REACQUIRE_HELP             = "Reacquire dependencies from their origins. Specify names of specific dependencies to reacquire separated by commas, e.g. `--reacquire = foo,bar,baz`.";
 static constexpr auto ARG_TRACK_NAME_SHORT           = "-t";
@@ -32,6 +34,7 @@ static constexpr auto FILENAME_SETTINGS_YML          = "settings.yml";
 static constexpr auto DIR_PROJECT_DIP                = ".dip";
 static constexpr auto DIR_PROJECT_DOPE               = "dope";
 static constexpr auto KEY_GIT                        = "git";
+static constexpr auto KEY_PATH                       = "path";
 static constexpr auto KEY_REGISTRY                   = "registry";
 static constexpr auto KEY_NAME                       = "name";
 static constexpr auto KEY_URL                        = "url";

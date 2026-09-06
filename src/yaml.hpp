@@ -1,0 +1,239 @@
+#include "const-strings.hpp"
+#include "context.hpp"
+#include "dep.hpp"
+#include "fs.hpp"
+#include "progs.hpp"
+#include "pmr-format.hpp"
+#include <fkYAML/node.hpp>
+
+namespace dip {
+
+using node_t = fkyaml::basic_node<std::vector, std::unordered_map>;
+
+struct yml_project_settings {
+	std::filesystem::path registry_path;
+};
+
+struct yml_registry {
+	std::pmr::vector<dip::dep> deps;
+};
+
+[[nodiscard]]
+auto read_string(context* ctx, const node_t& node, std::string_view key) -> std::optional<std::pmr::string> {
+	if (node.contains(key)) {
+		const auto value_node = node.at(key);
+		if (value_node.is_string()) {
+			const auto str = value_node.get_value<std::string>();
+			return std::pmr::string{str.data(), str.size(), ctx->mem};
+		}
+	}
+	return std::nullopt;
+}
+
+[[nodiscard]]
+auto to_pmr_string(context* ctx, const node_t& mapping, std::string_view key) -> std::pmr::string {
+	auto node = mapping.at(key);
+	if (!node.is_string()) {
+		throw std::runtime_error{std::format("The '{}' key must be a string, but found '{}'.", key, fkyaml::to_string(node.get_type()))};
+	}
+	auto str = node.get_value<std::string>();
+	return {str.data(), str.size(), ctx->mem};
+}
+
+[[nodiscard]]
+auto find_origin_git(context* ctx, const node_t& mapping) -> std::optional<dip::origin_git_repo> {
+	if (mapping.contains(KEY_GIT)) {
+		auto git = dip::origin_git_repo{
+			.url = to_pmr_string(ctx, mapping, KEY_GIT),
+		};
+		if (mapping.contains(KEY_TAG)) {
+			git.tag = to_pmr_string(ctx, mapping, KEY_TAG);
+		}
+		return git;
+	}
+	return std::nullopt;
+}
+
+[[nodiscard]]
+auto find_origin_url(context* ctx, const node_t& mapping) -> std::optional<dip::origin_url> {
+	if (mapping.contains(KEY_URL)) {
+		auto url = dip::origin_url{
+			.url = to_pmr_string(ctx, mapping, KEY_URL),
+		};
+		if (mapping.contains(KEY_MD5)) {
+			url.md5 = to_pmr_string(ctx, mapping, KEY_MD5);
+		}
+		return url;
+	}
+	return std::nullopt;
+}
+
+[[nodiscard]]
+auto find_origin(context* ctx, const node_t& mapping) -> dip::origin {
+	if (const auto url = find_origin_url(ctx, mapping)) { return *url; }
+	if (const auto git = find_origin_git(ctx, mapping)) { return *git; }
+	throw std::runtime_error{std::format("Each item in the registry must contain either a '{}' or '{}' key.", KEY_URL, KEY_GIT)};
+}
+
+[[nodiscard]]
+auto find_string(context* ctx, const node_t& mapping, std::string_view key) -> std::optional<std::pmr::string> {
+	if (mapping.contains(key)) {
+		return to_pmr_string(ctx, mapping, key);
+	}
+	return std::nullopt;
+}
+
+
+[[nodiscard]]
+auto find_bool(context*, const node_t& mapping, std::string_view key) -> std::optional<bool> {
+	if (mapping.contains(key)) {
+		auto node = mapping.at(key);
+		if (!node.is_boolean()) {
+			throw std::runtime_error{std::format("The '{}' key must be a boolean, but found '{}'.", key, fkyaml::to_string(node.get_type()))};
+		}
+		return node.get_value<bool>();
+	}
+	return std::nullopt;
+}
+
+[[nodiscard]]
+auto get_registry_path_from_settings_or_use_default(context* ctx, const node_t& node, const std::filesystem::path& settings_yml_file_path, const std::filesystem::path& default_registry_yml_file_path) -> std::filesystem::path {
+	if (node.contains(KEY_REGISTRY)) {
+		auto value_node = node.at(KEY_REGISTRY);
+		return {to_pmr_string(ctx, node, KEY_REGISTRY)};
+	}
+	ctx->log->info(pmr_format(ctx,
+		"No '{}' key was found in '{}'.\n"
+		"I'm going to assume there's a registry at '{}'.",
+		KEY_REGISTRY,
+		settings_yml_file_path.string(),
+		default_registry_yml_file_path.string()));
+	return default_registry_yml_file_path;
+}
+
+[[nodiscard]]
+auto make_default_registry_yml_file_path(const std::filesystem::path& dip_dir) -> std::filesystem::path {
+	return dip_dir / FILENAME_REGISTRY_YML;
+}
+
+[[nodiscard]]
+auto read_project_settings_yml(context* ctx, const std::filesystem::path& dip_dir, const std::filesystem::path& path) -> std::optional<yml_project_settings> {
+	if (std::filesystem::exists(path)) {
+		ctx->log->info(pmr_format(ctx, "Reading project settings from '{}'", path.string()));
+		if (const auto text = read_file_text(ctx, path)) {
+			const auto node = node_t::deserialize(*text);
+			return yml_project_settings {
+				.registry_path = get_registry_path_from_settings_or_use_default(ctx, node, path, make_default_registry_yml_file_path(dip_dir))
+			};
+		}
+		ctx->log->info(pmr_format(ctx, "Failed to read project settings from '{}'", path.string()));
+		return std::nullopt;
+	}
+	ctx->log->info(pmr_format(ctx, "No project settings file found at '{}'", path.string()));
+	return std::nullopt;
+}
+
+[[nodiscard]]
+auto read_dep_yml(context* ctx, const node_t& mapping, const std::filesystem::path& registry_file) -> dip::dep {
+	if (!mapping.is_mapping())       { throw std::runtime_error{std::format("Each item in the registry must be a mapping, but found '{}'.", fkyaml::to_string(mapping.get_type()))}; }
+	if (!mapping.contains(KEY_NAME)) { throw std::runtime_error{std::format("Each item in the registry must contain a '{}' key.", KEY_NAME)}; }
+	auto name                       = to_pmr_string(ctx, mapping, KEY_NAME);
+	auto origin                     = find_origin(ctx, mapping);
+	auto cmake_options              = find_string(ctx, mapping, KEY_CMAKE_OPTIONS);
+	auto cmake_options_mac          = find_string(ctx, mapping, KEY_CMAKE_OPTIONS_MAC);
+	auto cmake_options_lin          = find_string(ctx, mapping, KEY_CMAKE_OPTIONS_LIN);
+	auto cmake_options_win          = find_string(ctx, mapping, KEY_CMAKE_OPTIONS_WIN);
+	auto override_find_package_name = find_string(ctx, mapping, KEY_OVERRIDE_FIND_PACKAGE_NAME);
+	auto track                      = find_bool(ctx, mapping, KEY_TRACK);
+	return dip::dep {
+		.name                       = std::move(name),
+		.origin                     = std::move(origin),
+		.cmake_options              = cmake_options.value_or(std::pmr::string{ctx->mem}),
+		.cmake_options_mac          = cmake_options_mac.value_or(std::pmr::string{ctx->mem}),
+		.cmake_options_lin          = cmake_options_lin.value_or(std::pmr::string{ctx->mem}),
+		.cmake_options_win          = cmake_options_win.value_or(std::pmr::string{ctx->mem}),
+		.override_find_package_name = override_find_package_name.value_or(std::pmr::string{ctx->mem}),
+		.registry_file              = registry_file,
+		.track                      = track.value_or(false),
+	};
+}
+
+[[nodiscard]]
+auto read_deps_yml(context* ctx, const node_t& list, const std::filesystem::path& registry_file) -> std::pmr::vector<dip::dep> {
+	auto deps = std::pmr::vector<dip::dep>{ctx->mem};
+	if (list.is_sequence()) {
+		for (const auto& node : list) {
+			deps.push_back(read_dep_yml(ctx, node, registry_file));
+		}
+	}
+	return deps;
+};
+
+[[nodiscard]]
+auto read_registry_yml(context* ctx, const std::filesystem::path& path) -> yml_registry {
+	if (std::filesystem::exists(path)) {
+		ctx->log->info(pmr_format(ctx, "Reading registry from '{}'", path.string()));
+		if (const auto text = read_file_text(ctx, path)) {
+			const auto node = node_t::deserialize(*text);
+			return yml_registry{
+				.deps = read_deps_yml(ctx, node, path)
+			};
+		}
+		ctx->log->info(pmr_format(ctx, "Failed to read registry from '{}'", path.string()));
+		return {};
+	}
+	ctx->log->info(pmr_format(ctx, "No registry file found at '{}'", path.string()));
+	return {};
+}
+
+auto map_origin_into(node_t::mapping_type* mapping, const std::filesystem::path& origin) -> void {
+	(*mapping)[KEY_PATH] = origin;
+}
+
+auto map_origin_into(node_t::mapping_type* mapping, const origin_git_repo& origin) -> void {
+	(*mapping)[KEY_GIT] = origin.url;
+	if (!origin.tag.empty()) {
+		(*mapping)[KEY_TAG] = origin.tag;
+	}
+}
+
+auto map_origin_into(node_t::mapping_type* mapping, const origin_url& origin) -> void {
+	(*mapping)[KEY_URL] = origin.url;
+	if (!origin.md5.empty()) {
+		(*mapping)[KEY_MD5] = origin.md5;
+	}
+}
+
+auto map_into(node_t::mapping_type* mapping, const dip::origin& origin) -> void {
+	std::visit([mapping](const auto& origin) { map_origin_into(mapping, origin); }, origin);
+}
+
+[[nodiscard]]
+auto to_yaml(const dip::dep& dep) -> node_t::mapping_type {
+	auto mapping = node_t::mapping_type{};
+	mapping[KEY_NAME] = dep.name;
+	map_into(&mapping, dep.origin);
+	if (dep.track)                               { mapping[KEY_TRACK]                      = dep.track; }
+	if (!dep.cmake_options.empty())              { mapping[KEY_CMAKE_OPTIONS]              = dep.cmake_options; }
+	if (!dep.cmake_options_mac.empty())          { mapping[KEY_CMAKE_OPTIONS_MAC]          = dep.cmake_options_mac; }
+	if (!dep.cmake_options_lin.empty())          { mapping[KEY_CMAKE_OPTIONS_LIN]          = dep.cmake_options_lin; }
+	if (!dep.cmake_options_win.empty())          { mapping[KEY_CMAKE_OPTIONS_WIN]          = dep.cmake_options_win; }
+	if (!dep.override_find_package_name.empty()) { mapping[KEY_OVERRIDE_FIND_PACKAGE_NAME] = dep.override_find_package_name; }
+	return mapping;
+}
+
+auto save_to(context* ctx, const yml_registry& registry, const std::filesystem::path& path) -> void {
+	auto tmp_path = path;
+	tmp_path.replace_extension(".tmp");
+	auto root = node_t::sequence_type{};
+	for (const auto& dep : registry.deps) {
+		root.push_back(to_yaml(dep));
+	}
+	auto string = node_t::serialize(root);
+	write_text_to_file(tmp_path, string);
+	std::filesystem::rename(tmp_path, path);
+	std::filesystem::remove(tmp_path);
+	ctx->log->info(pmr_format(ctx, "Saved registry to '{}'", path.string()));
+}
+
+} // dip

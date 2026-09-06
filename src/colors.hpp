@@ -32,6 +32,7 @@ static const auto fg_light_cyan    = "\033[96m";
 static const auto fg_light_gray    = "\033[97m";
 static const auto reset            = "\033[0m";
 static const auto dep              = std::format("{}{}", bg_reset, fg_green);
+static const auto detail           = std::format("{}{}", bg_reset, fg_gray);
 static const auto error            = std::format("{}{}", bg_red, fg_reset);
 static const auto info             = "";
 static const auto success          = std::format("{}{}", bg_green, fg_reset);
