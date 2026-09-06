@@ -1,3 +1,4 @@
+#include "cfg.hpp"
 #include "const-strings.hpp"
 #include "context.hpp"
 #include "dep.hpp"
@@ -12,11 +13,20 @@ using node_t = fkyaml::basic_node<std::vector, std::unordered_map>;
 
 struct yml_project_settings {
 	std::filesystem::path registry_path;
+	std::pmr::vector<dip::cfg> cfgs;
 };
 
 struct yml_registry {
 	std::pmr::vector<dip::dep> deps;
 };
+
+[[nodiscard]]
+auto make_default_cfg_list(context* ctx) -> std::pmr::vector<dip::cfg> {
+	return std::pmr::vector<dip::cfg>{
+		dip::cfg{.name = {"dbg", ctx->mem}, .cmake_config = {"Debug", ctx->mem}},
+		dip::cfg{.name = {"rel", ctx->mem}, .cmake_config = {"Release", ctx->mem}}
+	};
+}
 
 [[nodiscard]]
 auto read_string(context* ctx, const node_t& node, std::string_view key) -> std::optional<std::pmr::string> {
@@ -97,10 +107,9 @@ auto find_bool(context*, const node_t& mapping, std::string_view key) -> std::op
 }
 
 [[nodiscard]]
-auto get_registry_path_from_settings_or_use_default(context* ctx, const node_t& node, const std::filesystem::path& settings_yml_file_path, const std::filesystem::path& default_registry_yml_file_path) -> std::filesystem::path {
-	if (node.contains(KEY_REGISTRY)) {
-		auto value_node = node.at(KEY_REGISTRY);
-		return {to_pmr_string(ctx, node, KEY_REGISTRY)};
+auto get_registry_path_from_yaml_or_use_default(context* ctx, const node_t& root, const std::filesystem::path& settings_yml_file_path, const std::filesystem::path& default_registry_yml_file_path) -> std::filesystem::path {
+	if (root.contains(KEY_REGISTRY)) {
+		return {to_pmr_string(ctx, root, KEY_REGISTRY)};
 	}
 	ctx->log->info(pmr_format(ctx,
 		"No '{}' key was found in '{}'.\n"
@@ -109,6 +118,36 @@ auto get_registry_path_from_settings_or_use_default(context* ctx, const node_t& 
 		settings_yml_file_path.string(),
 		default_registry_yml_file_path.string()));
 	return default_registry_yml_file_path;
+}
+
+[[nodiscard]]
+auto get_cfg_list_from_yaml_or_use_default(context* ctx, const node_t& root, std::pmr::vector<dip::cfg> default_cfgs) -> std::pmr::vector<dip::cfg> {
+	auto list = std::pmr::vector<dip::cfg>{ctx->mem};
+	if (root.contains(KEY_CFGS)) {
+		const auto cfgs_node = root.at(KEY_CFGS);
+		if (!cfgs_node.is_mapping()) {
+			throw std::runtime_error{std::format("The '{}' key must be a mapping, but found '{}'.", KEY_CFGS, fkyaml::to_string(cfgs_node.get_type()))};
+		}
+		for (auto it = cfgs_node.begin(); it != cfgs_node.end(); it++) {
+			const auto cfg_node = *it;
+			if (!cfg_node.is_mapping()) {
+				throw std::runtime_error{std::format("Each item in the '{}' mapping must be a mapping, but found '{}'.", KEY_CFGS, fkyaml::to_string(cfg_node.get_type()))};
+			}
+			if (!cfg_node.contains(KEY_CMAKE_CONFIG)) {
+				throw std::runtime_error{std::format("Each item in the '{}' mapping must contain a '{}' key.", KEY_CFGS, KEY_CMAKE_CONFIG)};
+			}
+			const auto name = it.key().get_value<std::string>();
+			const auto cmake_config = to_pmr_string(ctx, cfg_node, KEY_CMAKE_CONFIG);
+			ctx->log->info(pmr_format(ctx, "Found cfg '{}' with cmake config '{}'", name, cmake_config));
+			list.push_back(dip::cfg{
+				.name         = std::pmr::string{name, ctx->mem},
+				.cmake_config = cmake_config
+			});
+		}
+		return list;
+	}
+	ctx->log->info(pmr_format(ctx, "No '{}' key was found in project settings, so using default cfg list: dbg,rel", KEY_CFGS));
+	return default_cfgs;
 }
 
 [[nodiscard]]
@@ -123,7 +162,8 @@ auto read_project_settings_yml(context* ctx, const std::filesystem::path& dip_di
 		if (const auto text = read_file_text(ctx, path)) {
 			const auto node = node_t::deserialize(*text);
 			return yml_project_settings {
-				.registry_path = get_registry_path_from_settings_or_use_default(ctx, node, path, make_default_registry_yml_file_path(dip_dir))
+				.registry_path = get_registry_path_from_yaml_or_use_default(ctx, node, path, make_default_registry_yml_file_path(dip_dir)),
+				.cfgs          = get_cfg_list_from_yaml_or_use_default(ctx, node, make_default_cfg_list(ctx))
 			};
 		}
 		ctx->log->info(pmr_format(ctx, "Failed to read project settings from '{}'", path.string()));

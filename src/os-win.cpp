@@ -22,12 +22,20 @@ struct program_info {
 
 static const auto PROGRAM_INFO = std::array{
 	program_info{
+		.name          = "cmake",
+		.download_help = "You can download git for Windows from https://cmake.org/download/ or by installing a package manager like Chocolatey (https://chocolatey.org/) and running `choco install cmake`.",
+	},
+	program_info{
 		.name          = "git",
 		.download_help = "You can download git for Windows from https://git-scm.com/download/win or by installing a package manager like Chocolatey (https://chocolatey.org/) and running `choco install git`.",
 	},
 	program_info{
 		.name          = "wget",
 		.download_help = "You can download wget for Windows from https://eternallybored.org/misc/wget/ or by installing a package manager like Chocolatey (https://chocolatey.org/) and running `choco install wget`.",
+	},
+	program_info{
+		.name          = "7-zip",
+		.download_help = "You can download 7-zip for Windows from https://www.7-zip.org/download.html or by installing a package manager like Chocolatey (https://chocolatey.org/) and running `choco install 7zip`.",
 	},
 };
 

@@ -25,4 +25,19 @@ auto write_text_to_file(const std::filesystem::path& path, std::string_view text
 	file << text.data();
 }
 
+[[nodiscard]]
+auto sanitize_to_folder_name(std::pmr::string text) -> std::filesystem::path {
+	static constexpr auto DISALLOWED_CHARS = std::array{
+		'<', '>', ':', '"', '/', '\\', '|', '?', '*'
+	};
+	for (auto& c : text) {
+		if (std::ranges::find(DISALLOWED_CHARS, c) != std::cend(DISALLOWED_CHARS)) { c = '_'; }
+		if (static_cast<unsigned char>(c) < 0x20) { c = '_'; }
+	}
+	while (!text.empty() && (text.back() == ' ' || text.back() == '.')) {
+		text.pop_back();
+	}
+	return std::filesystem::path{text};
+}
+
 } // dip

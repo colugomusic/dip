@@ -4,8 +4,9 @@
 #include "list-util.hpp"
 #include "git.hpp"
 #include "requirements.hpp"
+#include "wget.hpp"
 #include "yaml.hpp"
-#include <rang.hpp>
+#include "zip.hpp"
 #include <string>
 #include <vector>
 
@@ -42,25 +43,28 @@ struct state {
 	bool verbose      = false;
 };
 
-auto print_dep_task(const context* ctx, std::string_view dep, std::string_view task) -> void { if (ctx->print_options.dep_tasks) { std::cout << pmr_format(ctx, "{}{}{}: {}\n", colors::dep, dep, colors::reset, task); } }
-auto print_detail(const context* ctx, std::string_view s)                            -> void { if (ctx->print_options.detail)    { std::cout << pmr_format(ctx, "{}{}{}\n", colors::detail, s, colors::reset); } }
-auto print_error(const context* ctx, std::string_view s)                             -> void { if (ctx->print_options.errors)    { std::cout << pmr_format(ctx, "\n{}{}{}\n", colors::error, s, colors::reset); } }
-auto print_info(const context* ctx, std::string_view s)                              -> void { if (ctx->print_options.info)      { std::cout << pmr_format(ctx, "{}{}{}\n", colors::info, s, colors::reset); } }
-auto print_warning(const context* ctx, std::string_view s)                           -> void { if (ctx->print_options.warnings)  { std::cout << pmr_format(ctx, "{}{}{}\n", colors::warning, s, colors::reset); } }
+auto print(const context* ctx, log_dep_task v)     { if (ctx->print_options.dep_tasks) { std::cout << pmr_format(ctx, "{}{}{}: {}\n", colors::dep, v.dep, colors::reset, v.task); } }
+auto print(const context* ctx, log_dep_cfg_task v) { if (ctx->print_options.dep_tasks) { std::cout << pmr_format(ctx, "{}{}{}: {}{}{}: {}\n", colors::dep, v.dep, colors::reset, colors::cfg, v.cfg, colors::reset, v.task); } }
+auto print(const context* ctx, log_detail v)       { if (ctx->print_options.detail)    { std::cout << pmr_format(ctx, "{}{}{}\n", colors::detail, v.v, colors::reset); } }
+auto print(const context* ctx, log_error v)        { if (ctx->print_options.errors)    { std::cout << pmr_format(ctx, "\n{}{}{}\n", colors::error, v.v, colors::reset); } }
+auto print(const context* ctx, log_info v)         { if (ctx->print_options.info)      { std::cout << pmr_format(ctx, "{}{}{}\n", colors::info, v.v, colors::reset); } }
+auto print(const context* ctx, log_warn v)         { if (ctx->print_options.warnings)  { std::cout << pmr_format(ctx, "{}{}{}\n", colors::warning, v.v, colors::reset); } }
 
-[[nodiscard]] auto fn_print_dep_task(const context* ctx) { return [ctx](std::string_view dep, std::string_view task) { print_dep_task(ctx, dep, task); }; }
-[[nodiscard]] auto fn_print_detail(const context* ctx)   { return [ctx](std::string_view s)                          { print_detail(ctx, s); }; }
-[[nodiscard]] auto fn_print_error(const context* ctx)    { return [ctx](std::string_view s)                          { print_error(ctx, s); }; }
-[[nodiscard]] auto fn_print_info(const context* ctx)     { return [ctx](std::string_view s)                          { print_info(ctx, s); }; }
-[[nodiscard]] auto fn_print_warning(const context* ctx)  { return [ctx](std::string_view s)                          { print_warning(ctx, s); }; }
+[[nodiscard]] auto fn_print_dep_task(const context* ctx)     { return [ctx](log_dep_task v)     { print(ctx, v); }; }
+[[nodiscard]] auto fn_print_dep_cfg_task(const context* ctx) { return [ctx](log_dep_cfg_task v) { print(ctx, v); }; }
+[[nodiscard]] auto fn_print_detail(const context* ctx)       { return [ctx](log_detail v)       { print(ctx, v); }; }
+[[nodiscard]] auto fn_print_error(const context* ctx)        { return [ctx](log_error v)        { print(ctx, v); }; }
+[[nodiscard]] auto fn_print_info(const context* ctx)         { return [ctx](log_info v)         { print(ctx, v); }; }
+[[nodiscard]] auto fn_print_warning(const context* ctx)      { return [ctx](log_warn v)         { print(ctx, v); }; }
 
 auto print_and_clear_log(const context* ctx) -> void {
 	auto fns = logger_fns{
-		.dep_task = fn_print_dep_task(ctx),
-		.detail   = fn_print_detail(ctx),
-		.error    = fn_print_error(ctx),
-		.info     = fn_print_info(ctx),
-		.warn     = fn_print_warning(ctx)
+		.dep_task     = fn_print_dep_task(ctx),
+		.dep_cfg_task = fn_print_dep_cfg_task(ctx),
+		.detail       = fn_print_detail(ctx),
+		.error        = fn_print_error(ctx),
+		.info         = fn_print_info(ctx),
+		.warn         = fn_print_warning(ctx)
 	};
 	ctx->log->visit(fns);
 	ctx->log->clear();
@@ -75,7 +79,7 @@ auto exit_failure(context* ctx) -> int {
 [[nodiscard]]
 auto exit_failure(context* ctx, std::string_view what) -> int {
     print_and_clear_log(ctx);
-	fn_print_error(ctx)(what);
+	print(ctx, log_error{to_pmr_string(ctx, what)});
 	return EXIT_FAILURE;
 }
 
@@ -139,10 +143,22 @@ auto expand_track(context* ctx, const yml_registry& registry, std::pmr::vector<s
 }
 
 [[nodiscard]]
-auto get_work_to_do(context* ctx, const yml_registry& registry, const dip::work_requested& work_requested) -> work_to_do {
+auto get_cfgs_to_process(context* ctx, const yml_project_settings& settings, const dip::work_requested& work_requested) -> std::pmr::vector<std::pmr::string> {
+	if (!work_requested.cfg.empty()) {
+		return work_requested.cfg;
+	}
+	const auto fn_get_cfg_name = [](const dip::cfg& cfg) { return cfg.name; };
+	auto list = std::pmr::vector<std::pmr::string>{ctx->mem};
+	std::ranges::transform(settings.cfgs, std::back_inserter(list), fn_get_cfg_name);
+	return list;
+}
+
+[[nodiscard]]
+auto get_work_to_do(context* ctx, const yml_project_settings& settings, const yml_registry& registry, const dip::work_requested& work_requested) -> work_to_do {
 	auto track     = expand_track(ctx, registry, work_requested.track);
 	auto reacquire = work_requested.reacquire;
 	return work_to_do{
+		.cfgs      = get_cfgs_to_process(ctx, settings, work_requested),
 		.process   = sort_deps_into_processing_order(get_dep_names(ctx, registry), registry),
 		.track     = sort_and_remove_duplicates(ctx, track),
 		.reacquire = sort_and_remove_duplicates(ctx, reacquire)
@@ -188,13 +204,6 @@ auto print_info_about_default_directories(context* ctx, const dip::args& args, c
 	}
 }
 
-auto print_initial_state(context* ctx, const state& state) -> void {
-	ctx->log->info(pmr_format(ctx,
-		"Using registry: '{}'",
-		to_string(ctx, state.project_settings.registry_path)
-	));
-}
-
 auto get_dirs(context* ctx, const dip::args& args) -> dip::dirs {
 	const auto sys_cache_dir = os::get_system_cache_dir();
 	auto cache = args.cache.v.value_or(sys_cache_dir / "dip-cache");
@@ -218,8 +227,10 @@ auto get_work_requested(const dip::args& args) -> dip::work_requested {
 
 auto get_prog_paths(const requirements& reqs) -> dip::prog_paths {
 	return dip::prog_paths{
-		.git  = reqs.git_path,
-		.wget = reqs.wget_path
+		.cmake = reqs.cmake_path,
+		.git   = reqs.git_path,
+		.wget  = reqs.wget_path,
+		.zip   = reqs.zip_path
 	};
 }
 
@@ -232,8 +243,7 @@ auto init_state(context* ctx, dip::state* state, const dip::args& args, const re
 	state->verbose                         = args.verbose.v;
 	state->prog_paths                      = get_prog_paths(reqs);
 	state->registry                        = read_registry_yml(ctx, state->project_settings.registry_path);
-	state->work_to_do                      = get_work_to_do(ctx, state->registry, state->work_requested);
-	print_initial_state(ctx, *state);
+	state->work_to_do                      = get_work_to_do(ctx, state->project_settings, state->registry, state->work_requested);
 }
 
 [[nodiscard]]
@@ -273,15 +283,23 @@ auto user_requested_track(const dip::state& state, std::string_view name) -> boo
 }
 
 [[nodiscard]]
-auto have_source_code(const dip::state& state, const dip::dep& dep) -> bool {
-	// @TODO:
-	return false;
+auto have_source_code(context* ctx, const dip::state& state, const dip::dep& dep) -> bool {
+	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, dep);
+	const auto cmakelists_path = src_dir_path / "CMakeLists.txt";
+	const auto have_cmakelists = std::filesystem::exists(cmakelists_path);
+	if (have_cmakelists) {
+		ctx->log->detail(pmr_format(ctx, "Found CMakeLists.txt for '{}' at '{}'", dep.name, cmakelists_path.string()));
+	}
+	else {
+		ctx->log->detail(pmr_format(ctx, "No CMakeLists.txt found for '{}' at '{}'", dep.name, cmakelists_path.string()));
+	}
+	return have_cmakelists;
 }
 
 [[nodiscard]]
-auto to_acquire(const dip::state& state, const dip::dep& dep) -> bool {
+auto to_acquire(context* ctx, const dip::state& state, const dip::dep& dep) -> bool {
 	return
-		!have_source_code(state, dep) ||
+		!have_source_code(ctx, state, dep) ||
 		user_requested_reacquire(state, dep.name);
 }
 
@@ -293,9 +311,9 @@ auto to_track(const dip::state& state, const dip::dep& dep) -> bool {
 }
 
 [[nodiscard]]
-auto to_install(context* ctx, const dip::state& state, const dip::dep& dep) -> bool {
+auto to_install(context* ctx, const dip::state& state, const dip::dep& dep, std::string_view cfg) -> bool {
 	return
-		!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, dep);
+		!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, dep, cfg);
 }
 
 [[nodiscard]]
@@ -308,11 +326,13 @@ auto get_dep(dip::state* state, std::string_view name) -> dip::dep* {
 
 auto update_track_tag(context* ctx, const dip::prog_paths& progs, dip::dep* dep, origin_git_repo git) -> void {
 	ctx->log->dep_task(dep->name, pmr_format(ctx, "Fetching latest commit hash from '{}'", git.url));
+	print_and_clear_log(ctx);
 	const auto new_hash = get_latest_git_commit_hash(ctx, progs, git.url);
 	ctx->log->detail(pmr_format(ctx, "latest commit is '{}'", new_hash));
 	git.tag = new_hash;
 	dep->origin = git;
 	dep->track  = true;
+	ctx->log->dep_task(dep->name, pmr_format(ctx, "Updated tag to '{}'", git.tag));
 }
 
 auto update_track_tag(context* ctx, const dip::state& state, dip::dep* dep) -> void {
@@ -320,11 +340,44 @@ auto update_track_tag(context* ctx, const dip::state& state, dip::dep* dep) -> v
 	update_track_tag(ctx, state.prog_paths, dep, std::get<origin_git_repo>(dep->origin));
 }
 
-auto acquire(const dip::state& state, const dip::dep& dep) -> void {
+auto acquire_src_from_origin(context* ctx, const dip::state& state, const dip::dep& dep, const std::filesystem::path& origin) -> void {
+	ctx->log->dep_task(dep.name, pmr_format(ctx, "Copying source code from '{}'", origin.string()));
+	print_and_clear_log(ctx);
+	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, dep);
+	const auto copy_options =
+		std::filesystem::copy_options::recursive |
+		std::filesystem::copy_options::overwrite_existing;
+	std::filesystem::copy(origin, src_dir_path, copy_options);
+}
+
+auto acquire_src_from_origin(context* ctx, const dip::state& state, const dip::dep& dep, const origin_git_repo& origin) -> void {
+	ctx->log->dep_task(dep.name, pmr_format(ctx, "Cloning git repo '{} # {}'", origin.url, origin.tag));
+	print_and_clear_log(ctx);
+	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, dep);
 	// @TODO:
 }
 
-auto install(const dip::state& state, const dip::dep& dep) -> void {
+auto extract_to(context* ctx, const dip::prog_paths& progs, const dip::dep& dep, const std::filesystem::path& archive_path, const std::filesystem::path& dest_dir_path) -> void {
+	ctx->log->dep_task(dep.name, pmr_format(ctx, "Extracting '{}'", archive_path.filename().string()));
+	print_and_clear_log(ctx);
+	extract_to(ctx, progs, archive_path, dest_dir_path);
+}
+
+auto acquire_src_from_origin(context* ctx, const dip::state& state, const dip::dep& dep, const origin_url& origin) -> void {
+	ctx->log->dep_task(dep.name, pmr_format(ctx, "Downloading source code from '{}'", origin.url));
+	print_and_clear_log(ctx);
+	const auto dl_dir_path     = make_dl_dir_path(ctx, state.dirs, dep);
+	const auto src_dir_path    = make_src_dir_path(ctx, state.dirs, dep);
+	const auto downloaded_file = download_file(ctx, state.prog_paths, origin.url, dl_dir_path);
+	// @TODO: check md5
+	extract_to(ctx, state.prog_paths, dep, downloaded_file, src_dir_path);
+}
+
+auto acquire(context* ctx, const dip::state& state, const dip::dep& dep) -> void {
+	std::visit([ctx, &state, &dep](const auto& origin) { acquire_src_from_origin(ctx, state, dep, origin); }, dep.origin);
+}
+
+auto install(context* ctx, const dip::state& state, const dip::dep& dep, std::string_view cfg) -> void {
 	// @TODO:
 }
 
@@ -333,11 +386,13 @@ auto do_process(context* ctx, dip::state* state, std::string_view name) -> void 
 	if (to_track(*state, *dep)) {
 		update_track_tag(ctx, *state, dep);
 	}
-	if (to_acquire(*state, *dep)) {
-		acquire(*state, *dep);
+	if (to_acquire(ctx, *state, *dep)) {
+		acquire(ctx, *state, *dep);
 	}
-	if (to_install(ctx, *state, *dep)) {
-		install(*state, *dep);
+	for (const auto cfg : state->work_to_do.cfgs) {
+		if (to_install(ctx, *state, *dep, cfg)) {
+			install(ctx, *state, *dep, cfg);
+		}
 	}
 }
 

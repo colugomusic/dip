@@ -18,10 +18,27 @@ auto make_proc_args(const std::filesystem::path& prog_path, std::string_view arg
 }
 
 [[nodiscard]]
+auto run_process_and_return_exit_status(context* ctx, const std::filesystem::path& prog_path, std::string_view args) -> int {
+	auto out = std::pmr::string{ctx->mem};
+	auto err = std::pmr::string{ctx->mem};
+	auto read_stdout = [ctx, &out](const char* bytes, size_t n) {
+		out.append(bytes, n);
+	};
+	auto read_stderr = [ctx, &err](const char* bytes, size_t n) {
+		err.append(bytes, n);
+	};
+	ctx->log->detail(pmr_format(ctx, "Running process: {} {}", prog_path.string(), args));
+	auto status = TinyProcessLib::Process{make_proc_args(prog_path, args), "", std::move(read_stdout), std::move(read_stderr)}.get_exit_status();
+	ctx->log->detail(pmr_format(ctx, "stdout: {}", out));
+	ctx->log->detail(pmr_format(ctx, "stderr: {}", err));
+	ctx->log->detail(pmr_format(ctx, "Process exit status: {}", status));
+	return status;
+}
+
+[[nodiscard]]
 auto run_process_and_return_stderr(context* ctx, const std::filesystem::path& prog_path, std::string_view args) -> std::pmr::string {
 	auto err = std::pmr::string{ctx->mem};
 	auto read_stderr = [ctx, &err](const char* bytes, size_t n) {
-		ctx->log->detail("read");
 		err.append(bytes, n);
 	};
 	ctx->log->detail(pmr_format(ctx, "Running process: {} {}", prog_path.string(), args));

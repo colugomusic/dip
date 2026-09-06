@@ -8,8 +8,10 @@
 namespace dip {
 
 struct requirements {
+	std::filesystem::path cmake_path;
 	std::filesystem::path git_path;
 	std::filesystem::path wget_path;
+	std::filesystem::path zip_path;
 };
 
 [[nodiscard]]
@@ -82,15 +84,19 @@ auto make_missing_programs_error(context* ctx, std::span<const std::pmr::string>
 auto check_requirements(context* ctx) -> std::optional<requirements> {
 	auto missing_programs = std::pmr::vector<std::pmr::string>{ctx->mem};
 	ctx->log->info("Checking requirements...");
-	const auto git  = check_program_available(ctx, "git", &missing_programs);
-	const auto wget = check_program_available(ctx, "wget", &missing_programs);
+	const auto cmake = check_program_available(ctx, "cmake", &missing_programs);
+	const auto git   = check_program_available(ctx, "git", &missing_programs);
+	const auto wget  = check_program_available(ctx, "wget", &missing_programs);
+	const auto zip   = check_program_available(ctx, "7z", &missing_programs);
 	if (!missing_programs.empty()) {
 		ctx->log->error(make_missing_programs_error(ctx, missing_programs));
 		return std::nullopt;
 	}
 	return requirements{
-		.git_path  = *git,
-		.wget_path = *wget
+		.cmake_path = *cmake,
+		.git_path   = *git,
+		.wget_path  = *wget,
+		.zip_path   = *zip
 	};
 }
 
