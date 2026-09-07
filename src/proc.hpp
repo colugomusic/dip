@@ -8,6 +8,9 @@
 
 namespace dip {
 
+using handle_stdout_fn = std::function<void(const char* bytes, size_t n)>;
+using handle_stderr_fn = std::function<void(const char* bytes, size_t n)>;
+
 [[nodiscard]]
 auto make_proc_args(const std::filesystem::path& prog_path, std::string_view args) -> std::vector<std::string> {
 	auto fn_subrange_to_string = [](auto&& subrange) { return std::string{subrange.begin(), subrange.end()}; };
@@ -57,6 +60,14 @@ auto run_process_and_return_stdout(context* ctx, const std::filesystem::path& pr
 	TinyProcessLib::Process{make_proc_args(prog_path, args), "", std::move(read_stdout)};
 	ctx->log->detail(pmr_format(ctx, "stdout: {}", out));
 	return out;
+}
+
+[[nodiscard]]
+auto run_process_with_output_handlers(context* ctx, const std::filesystem::path& prog_path, std::string_view args, handle_stdout_fn handle_stdout, handle_stderr_fn handle_stderr) -> int {
+	ctx->log->detail(pmr_format(ctx, "Running process: {} {}", prog_path.string(), args));
+	auto status = TinyProcessLib::Process{make_proc_args(prog_path, args), "", handle_stdout, handle_stderr}.get_exit_status();
+	ctx->log->detail(pmr_format(ctx, "Process exit status: {}", status));
+	return status;
 }
 
 } // dip

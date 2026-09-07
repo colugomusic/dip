@@ -2,6 +2,7 @@
 
 #include "dep.hpp"
 #include "fs.hpp"
+#include "string-util.hpp"
 
 namespace dip {
 
@@ -24,7 +25,12 @@ auto make_install_prefix_path(const dip::dirs& dirs, std::string_view cfg) -> st
 
 [[nodiscard]]
 auto make_origin_dir_name(context* ctx, const origin_git_repo& v) -> std::filesystem::path {
-	return sanitize_to_folder_name(v.url) / v.tag;
+	return sanitize_to_folder_name(v.url) / v.commit;
+}
+
+[[nodiscard]]
+auto make_origin_dir_name(context* ctx, const origin_git_tracked_branch& v) -> std::filesystem::path {
+	return sanitize_to_folder_name(v.url) / pmr_format(ctx, "track-{}", v.branch);
 }
 
 [[nodiscard]]

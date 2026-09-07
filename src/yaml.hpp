@@ -18,6 +18,7 @@ struct yml_cmake_options {
 };
 
 struct yml_project_settings {
+	std::pmr::string name;
 	std::filesystem::path registry_path;
 	yml_cmake_options cmake_options;
 	std::pmr::vector<dip::cfg> cfgs;
@@ -67,15 +68,39 @@ auto to_pmr_string(context* ctx, const node_t& mapping, std::string_view key) ->
 }
 
 [[nodiscard]]
-auto find_origin_git(context* ctx, const node_t& mapping) -> std::optional<dip::origin_git_repo> {
+auto find_origin_git_repo(context* ctx, const node_t& mapping) -> std::optional<dip::origin_git_repo> {
 	if (mapping.contains(KEY_GIT)) {
-		auto git = dip::origin_git_repo{
-			.url = to_pmr_string(ctx, mapping, KEY_GIT),
-		};
-		if (mapping.contains(KEY_TAG)) {
-			git.tag = to_pmr_string(ctx, mapping, KEY_TAG);
+		auto url = to_pmr_string(ctx, mapping, KEY_GIT);
+		if (mapping.contains(KEY_COMMIT)) {
+			auto commit = to_pmr_string(ctx, mapping, KEY_COMMIT);
+			return origin_git_repo{
+				.url    = url,
+				.commit = commit
+			};
 		}
-		return git;
+	}
+	return std::nullopt;
+}
+
+[[nodiscard]]
+auto find_origin_git_tracked_branch(context* ctx, const node_t& mapping) -> std::optional<dip::origin_git_tracked_branch> {
+	if (mapping.contains(KEY_GIT)) {
+		auto url = to_pmr_string(ctx, mapping, KEY_GIT);
+		if (mapping.contains(KEY_TRACK)) {
+			auto branch = to_pmr_string(ctx, mapping, KEY_TRACK);
+			if (mapping.contains(KEY_COMMIT)) {
+				auto commit = to_pmr_string(ctx, mapping, KEY_COMMIT);
+				return origin_git_tracked_branch{
+					.url    = url,
+					.branch = branch,
+					.commit = commit
+				};
+			}
+			return origin_git_tracked_branch{
+				.url    = url,
+				.branch = branch
+			};
+		}
 	}
 	return std::nullopt;
 }
@@ -96,8 +121,9 @@ auto find_origin_url(context* ctx, const node_t& mapping) -> std::optional<dip::
 
 [[nodiscard]]
 auto find_origin(context* ctx, const node_t& mapping) -> dip::origin {
-	if (const auto url = find_origin_url(ctx, mapping)) { return *url; }
-	if (const auto git = find_origin_git(ctx, mapping)) { return *git; }
+	if (const auto url                = find_origin_url(ctx, mapping))                { return *url; }
+	if (const auto git_repo           = find_origin_git_repo(ctx, mapping))           { return *git_repo; }
+	if (const auto git_tracked_branch = find_origin_git_tracked_branch(ctx, mapping)) { return *git_tracked_branch; }
 	throw std::runtime_error{std::format("Each item in the registry must contain either a '{}' or '{}' key.", KEY_URL, KEY_GIT)};
 }
 
@@ -108,7 +134,6 @@ auto find_string(context* ctx, const node_t& mapping, std::string_view key) -> s
 	}
 	return std::nullopt;
 }
-
 
 [[nodiscard]]
 auto find_bool(context*, const node_t& mapping, std::string_view key) -> std::optional<bool> {
@@ -186,26 +211,25 @@ auto find_cmake_options(context* ctx, const node_t& mapping) -> yml_cmake_option
 }
 
 [[nodiscard]]
-auto read_project_settings_yml(context* ctx, const std::filesystem::path& dip_dir, const std::filesystem::path& path) -> std::optional<yml_project_settings> {
+auto read_project_settings_yml(context* ctx, const std::filesystem::path& dip_dir, const std::filesystem::path& path) -> yml_project_settings {
 	if (std::filesystem::exists(path)) {
 		ctx->log->info(pmr_format(ctx, "Reading project settings from '{}'", path.string()));
 		if (const auto text = read_file_text(ctx, path)) {
 			const auto node = node_t::deserialize(*text);
 			return yml_project_settings {
+				.name          = find_string(ctx, node, KEY_NAME).value_or({}),
 				.registry_path = get_registry_path_from_yaml_or_use_default(ctx, node, path, make_default_registry_yml_file_path(dip_dir)),
 				.cmake_options = find_cmake_options(ctx, node),
 				.cfgs          = get_cfg_list_from_yaml_or_use_default(ctx, node, make_default_cfg_list(ctx))
 			};
 		}
-		ctx->log->info(pmr_format(ctx, "Failed to read project settings from '{}'", path.string()));
-		return std::nullopt;
+		throw std::runtime_error{std::format("Failed to read project settings from '{}'", path.string())};
 	}
-	ctx->log->info(pmr_format(ctx, "No project settings file found at '{}'", path.string()));
-	return std::nullopt;
+	throw std::runtime_error{std::format("No project settings file found at '{}'", path.string())};
 }
 
 [[nodiscard]]
-auto read_dep_yml(context* ctx, const node_t& mapping, const std::filesystem::path& registry_file) -> dip::dep {
+auto read_dep_yml(context* ctx, const node_t& mapping) -> dip::dep {
 	if (!mapping.is_mapping())       { throw std::runtime_error{std::format("Each item in the registry must be a mapping, but found '{}'.", fkyaml::to_string(mapping.get_type()))}; }
 	if (!mapping.contains(KEY_NAME)) { throw std::runtime_error{std::format("Each item in the registry must contain a '{}' key.", KEY_NAME)}; }
 	auto name                       = to_pmr_string(ctx, mapping, KEY_NAME);
@@ -215,7 +239,6 @@ auto read_dep_yml(context* ctx, const node_t& mapping, const std::filesystem::pa
 	auto cmake_options_lin          = find_string(ctx, mapping, KEY_CMAKE_OPTIONS_LIN);
 	auto cmake_options_win          = find_string(ctx, mapping, KEY_CMAKE_OPTIONS_WIN);
 	auto override_find_package_name = find_string(ctx, mapping, KEY_OVERRIDE_FIND_PACKAGE_NAME);
-	auto track                      = find_bool(ctx, mapping, KEY_TRACK);
 	return dip::dep {
 		.name   = std::move(name),
 		.origin = std::move(origin),
@@ -225,18 +248,16 @@ auto read_dep_yml(context* ctx, const node_t& mapping, const std::filesystem::pa
 			.lin = cmake_options_lin.value_or(std::pmr::string{ctx->mem}),
 			.win = cmake_options_win.value_or(std::pmr::string{ctx->mem}),
 		},
-		.override_find_package_name = override_find_package_name.value_or(std::pmr::string{ctx->mem}),
-		.registry_file              = registry_file,
-		.track                      = track.value_or(false),
+		.override_find_package_name = override_find_package_name.value_or(std::pmr::string{ctx->mem})
 	};
 }
 
 [[nodiscard]]
-auto read_deps_yml(context* ctx, const node_t& list, const std::filesystem::path& registry_file) -> std::pmr::vector<dip::dep> {
+auto read_deps_yml(context* ctx, const node_t& list) -> std::pmr::vector<dip::dep> {
 	auto deps = std::pmr::vector<dip::dep>{ctx->mem};
 	if (list.is_sequence()) {
 		for (const auto& node : list) {
-			deps.push_back(read_dep_yml(ctx, node, registry_file));
+			deps.push_back(read_dep_yml(ctx, node));
 		}
 	}
 	return deps;
@@ -249,7 +270,7 @@ auto read_registry_yml(context* ctx, const std::filesystem::path& path) -> yml_r
 		if (const auto text = read_file_text(ctx, path)) {
 			const auto node = node_t::deserialize(*text);
 			return yml_registry{
-				.deps = read_deps_yml(ctx, node, path)
+				.deps = read_deps_yml(ctx, node)
 			};
 		}
 		ctx->log->info(pmr_format(ctx, "Failed to read registry from '{}'", path.string()));
@@ -265,9 +286,15 @@ auto map_origin_into(node_t::mapping_type* mapping, const std::filesystem::path&
 
 auto map_origin_into(node_t::mapping_type* mapping, const origin_git_repo& origin) -> void {
 	(*mapping)[KEY_GIT] = origin.url;
-	if (!origin.tag.empty()) {
-		(*mapping)[KEY_TAG] = origin.tag;
+	if (!origin.commit.empty()) {
+		(*mapping)[KEY_COMMIT] = origin.commit;
 	}
+}
+
+auto map_origin_into(node_t::mapping_type* mapping, const origin_git_tracked_branch& origin) -> void {
+	(*mapping)[KEY_GIT] = origin.url;
+	if (!origin.branch.empty()) { (*mapping)[KEY_TRACK]  = origin.branch; }
+	if (!origin.commit.empty()) { (*mapping)[KEY_COMMIT] = origin.commit; }
 }
 
 auto map_origin_into(node_t::mapping_type* mapping, const origin_url& origin) -> void {
@@ -286,7 +313,6 @@ auto to_yaml(const dip::dep& dep) -> node_t::mapping_type {
 	auto mapping = node_t::mapping_type{};
 	mapping[KEY_NAME] = dep.name;
 	map_into(&mapping, dep.origin);
-	if (dep.track)                               { mapping[KEY_TRACK]                      = dep.track; }
 	if (!dep.cmake_options.any.empty())          { mapping[KEY_CMAKE_OPTIONS]              = dep.cmake_options.any; }
 	if (!dep.cmake_options.mac.empty())          { mapping[KEY_CMAKE_OPTIONS_MAC]          = dep.cmake_options.mac; }
 	if (!dep.cmake_options.lin.empty())          { mapping[KEY_CMAKE_OPTIONS_LIN]          = dep.cmake_options.lin; }

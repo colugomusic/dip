@@ -5,10 +5,11 @@
 
 namespace dip {
 
-struct origin_git_repo { std::pmr::string url; std::pmr::string tag; };
-struct origin_url      { std::pmr::string url; std::pmr::string md5; };
+struct origin_git_repo           { std::pmr::string url; std::pmr::string commit; };
+struct origin_git_tracked_branch { std::pmr::string url; std::pmr::string branch; std::pmr::string commit; };
+struct origin_url                { std::pmr::string url; std::pmr::string md5; };
 
-using origin = std::variant<std::filesystem::path, origin_git_repo, origin_url>;
+using origin = std::variant<std::filesystem::path, origin_git_repo, origin_git_tracked_branch, origin_url>;
 
 struct dep_cmake_options {
 	std::pmr::string any;
@@ -22,8 +23,6 @@ struct dep {
 	dip::origin origin;
 	dep_cmake_options cmake_options;
 	std::pmr::string override_find_package_name;
-	std::filesystem::path registry_file;
-	bool track = false;
 };
 
 } // dip

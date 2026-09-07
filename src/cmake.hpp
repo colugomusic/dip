@@ -12,19 +12,18 @@
 namespace dip {
 
 [[nodiscard]]
-auto make_find_package_cmakelists(context* ctx, const dip::dep& dep) -> std::pmr::string {
-	const auto find_package_name = dep.override_find_package_name.empty() ? dep.name : dep.override_find_package_name;
+auto make_find_package_cmakelists(context* ctx, std::string_view name) -> std::pmr::string {
 	return pmr_format(ctx,
 		"cmake_minimum_required(VERSION 3.30)\n"
 		"project(dip-package-find-test CXX)\n"
 		"find_package({} REQUIRED CONFIG NO_CMAKE_SYSTEM_PATH NO_SYSTEM_ENVIRONMENT_PATH NO_CMAKE_SYSTEM_PACKAGE_REGISTRY)\n",
-		find_package_name
+		name
 	);
 }
 
 [[nodiscard]]
-auto cmake_package_can_be_found(context* ctx, const dip::dirs& dirs, const prog_paths& progs, const dip::dep& dep, const dip::cfg& cfg) -> bool {
-	const auto cmakelists_text      = make_find_package_cmakelists(ctx, dep);
+auto cmake_package_can_be_found(context* ctx, const dip::dirs& dirs, const prog_paths& progs, std::string_view name, const dip::cfg& cfg) -> bool {
+	const auto cmakelists_text      = make_find_package_cmakelists(ctx, name);
 	const auto pkg_check_dir_path   = make_pkg_check_dir_path(dirs);
 	const auto install_prefix_path  = make_install_prefix_path(dirs, cfg.name);
 	const auto cmakelists_path      = pkg_check_dir_path / "CMakeLists.txt";
@@ -33,7 +32,7 @@ auto cmake_package_can_be_found(context* ctx, const dip::dirs& dirs, const prog_
 	const auto args = pmr_format(ctx, "-B {} -S {} -DCMAKE_PREFIX_PATH={}", pkg_check_dir_path.string(), pkg_check_dir_path.string(), install_prefix_path.string());
 	const auto found = run_process_and_return_exit_status(ctx, progs.cmake, args) == 0;
 	if (!found) {
-		ctx->log->detail(pmr_format(ctx, "CMake could not find package '{}'", dep.name));
+		ctx->log->detail(pmr_format(ctx, "CMake could not find package '{}'", name));
 	}
 	return found;
 }

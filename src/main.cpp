@@ -24,6 +24,7 @@ struct work_to_do {
 	std::pmr::vector<std::pmr::string> process;
 	std::pmr::vector<std::pmr::string> track;
 	std::pmr::vector<std::pmr::string> reacquire;
+	std::optional<dip::dep> self_to_install;
 };
 
 struct work_requested {
@@ -36,12 +37,12 @@ struct state {
 	dip::dirs dirs;
 	dip::file_paths file_paths;
 	dip::prog_paths prog_paths;
+	std::pmr::string project_name;
 	yml_project_settings project_settings;
 	yml_registry registry;
 	dip::work_requested work_requested;
 	dip::work_to_do work_to_do;
-	bool install_self = false;
-	bool verbose      = false;
+	bool verbose = false;
 };
 
 auto print(const context* ctx, log_dep_task v)     { if (ctx->print_options.dep_tasks) { std::cout << pmr_format(ctx, "{}{}{} {}\n", colors::dep, v.dep, colors::reset, v.task); } }
@@ -91,19 +92,13 @@ auto exit_success(context* ctx) -> int {
 }
 
 [[nodiscard]]
-auto find_dip_dir(context* ctx, const std::filesystem::path& project_dir) -> std::filesystem::path {
+auto find_dip_dir(context* ctx, const std::filesystem::path& project_dir) -> std::optional<std::filesystem::path> {
 	const auto dip_dir = project_dir / DIR_PROJECT_DIP;
 	if (std::filesystem::exists(dip_dir)) {
 		ctx->log->info(pmr_format(ctx, "Found '{}' directory at '{}'", DIR_PROJECT_DIP, dip_dir.string()));
 		return dip_dir;
 	}
-	const auto dope_dir = project_dir / DIR_PROJECT_DOPE;
-	if (std::filesystem::exists(dope_dir)) {
-		ctx->log->info(pmr_format(ctx, "Found '{}' directory at '{}'", DIR_PROJECT_DOPE, dope_dir.string()));
-		return dope_dir;
-	}
-	ctx->log->info(pmr_format(ctx, "No '{}' or '{}' directory found in project directory '{}', so using default: '{}'", DIR_PROJECT_DIP, DIR_PROJECT_DOPE, project_dir.string(), dip_dir.string()));
-	return dip_dir;
+	return std::nullopt;
 }
 
 [[nodiscard]]
@@ -159,17 +154,10 @@ auto get_work_to_do(context* ctx, const yml_project_settings& settings, const ym
 	auto track     = expand_track(ctx, registry, work_requested.track);
 	auto reacquire = work_requested.reacquire;
 	return work_to_do{
-		.cfgs      = get_cfgs_to_process(ctx, settings, work_requested),
-		.process   = sort_deps_into_processing_order(get_dep_names(ctx, registry), registry),
-		.track     = sort_and_remove_duplicates(ctx, track),
-		.reacquire = sort_and_remove_duplicates(ctx, reacquire)
-	};
-}
-
-[[nodiscard]]
-auto make_default_project_settings_yml(const std::filesystem::path& dip_dir) -> yml_project_settings {
-	return yml_project_settings{
-		.registry_path = make_default_registry_yml_file_path(dip_dir)
+		.cfgs            = get_cfgs_to_process(ctx, settings, work_requested),
+		.process         = sort_deps_into_processing_order(get_dep_names(ctx, registry), registry),
+		.track           = sort_and_remove_duplicates(ctx, track),
+		.reacquire       = sort_and_remove_duplicates(ctx, reacquire)
 	};
 }
 
@@ -210,19 +198,22 @@ auto get_dirs(context* ctx, const dip::args& args) -> dip::dirs {
 	auto cache = args.cache.v.value_or(sys_cache_dir / "dip-cache");
 	auto root  = args.root.v.value_or(sys_cache_dir / "dip-root");
 	print_info_about_default_directories(ctx, args, sys_cache_dir, cache, root);
-	return dip::dirs{
-		.cache   = cache,
-		.root    = root,
-		.project = args.project_dir.v,
-		.dip     = find_dip_dir(ctx, args.project_dir.v)
-	};
+	if (const auto dip_dir = find_dip_dir(ctx, args.project_dir.v)) {
+		return dip::dirs{
+			.cache   = cache,
+			.root    = root,
+			.project = args.project_dir.v,
+			.dip     = *dip_dir
+		};
+	}
+	throw std::runtime_error{std::format("No '{}' directory found in project directory '{}'", DIR_PROJECT_DIP, args.project_dir.v.string())};
 }
 
 auto get_work_requested(const dip::args& args) -> dip::work_requested {
 	return dip::work_requested{
-		.cfg       = args.cfg.v,
-		.track     = args.track.v,
-		.reacquire = args.reacquire.v
+		.cfg          = args.cfg.v,
+		.track        = args.track.v,
+		.reacquire    = args.reacquire.v,
 	};
 }
 
@@ -235,16 +226,42 @@ auto get_prog_paths(const requirements& reqs) -> dip::prog_paths {
 	};
 }
 
+[[nodiscard]]
+auto make_self_dep(const dip::state& state) -> dep {
+	const auto name = state.project_settings.name;
+	if (name.empty()) {
+		throw std::runtime_error{"Can't self-install this project because settings.yml doesn't contain a 'name' key."};
+	}
+	return dip::dep{
+		.name   = name,
+		.origin = state.dirs.project,
+	};
+}
+
 auto init_state(context* ctx, dip::state* state, const dip::args& args, const requirements& reqs) -> void {
 	state->dirs                            = get_dirs(ctx, args);
 	state->file_paths.project_settings_yml = state->dirs.dip / FILENAME_SETTINGS_YML;
-	state->project_settings                = read_project_settings_yml(ctx, state->dirs.dip, state->file_paths.project_settings_yml).value_or(make_default_project_settings_yml(state->dirs.dip));
+	state->project_settings                = read_project_settings_yml(ctx, state->dirs.dip, state->file_paths.project_settings_yml);
 	state->work_requested                  = get_work_requested(args);
-	state->install_self                    = args.install_self.v;
 	state->verbose                         = args.verbose.v;
 	state->prog_paths                      = get_prog_paths(reqs);
 	state->registry                        = read_registry_yml(ctx, state->project_settings.registry_path);
 	state->work_to_do                      = get_work_to_do(ctx, state->project_settings, state->registry, state->work_requested);
+	if (args.install_self.v) {
+		state->work_to_do.self_to_install = make_self_dep(*state);
+	}
+}
+
+auto make_dependency_processing_state(context* ctx, dip::state parent_state, const dip::dep& dep, const std::filesystem::path& src_dir, const std::filesystem::path& dip_dir) -> dip::state {
+	auto state = std::move(parent_state);
+	state.dirs.project                    = src_dir;
+	state.dirs.dip                        = dip_dir;
+	state.file_paths.project_settings_yml = state.dirs.dip / FILENAME_SETTINGS_YML;
+	state.project_settings                = read_project_settings_yml(ctx, state.dirs.dip, state.file_paths.project_settings_yml);
+	state.registry                        = read_registry_yml(ctx, state.project_settings.registry_path);
+	state.work_to_do                      = get_work_to_do(ctx, state.project_settings, state.registry, state.work_requested);
+	state.work_to_do.self_to_install      = dep;
+	return state;
 }
 
 [[nodiscard]]
@@ -259,18 +276,11 @@ auto make_print_options(const dip::args& args) -> print_options {
 }
 
 [[nodiscard]]
-auto has_empty_track_tag(const dip::dep& dep) -> bool {
-	if (dep.track) {
-		if (const auto git = std::get_if<origin_git_repo>(&dep.origin)) {
-			return git->tag.empty();
-		}
+auto has_empty_track_commit(const dip::dep& dep) -> bool {
+	if (const auto origin = std::get_if<origin_git_tracked_branch>(&dep.origin)) {
+		return origin->commit.empty();
 	}
 	return false;
-}
-
-[[nodiscard]]
-auto is_git_dep(const dip::dep& dep) -> bool {
-	return std::holds_alternative<origin_git_repo>(dep.origin);
 }
 
 [[nodiscard]]
@@ -297,8 +307,9 @@ auto have_source_code(context* ctx, const dip::state& state, const dip::dep& dep
 }
 
 [[nodiscard]]
-auto to_acquire(context* ctx, const dip::state& state, const dip::dep& dep) -> bool {
+auto to_acquire(context* ctx, const dip::state& state, const dip::dep& dep, bool updated_track_commit) -> bool {
 	return
+		updated_track_commit ||
 		!have_source_code(ctx, state, dep) ||
 		user_requested_reacquire(state, dep.name);
 }
@@ -306,14 +317,41 @@ auto to_acquire(context* ctx, const dip::state& state, const dip::dep& dep) -> b
 [[nodiscard]]
 auto to_track(const dip::state& state, const dip::dep& dep) -> bool {
 	return
-		has_empty_track_tag(dep) ||
-		user_requested_track(state, dep.name) && is_git_dep(dep);
+		has_empty_track_commit(dep) ||
+		user_requested_track(state, dep.name) && std::holds_alternative<origin_git_tracked_branch>(dep.origin);
+}
+
+[[nodiscard]]
+auto get_find_package_name(const dip::dep& dep) -> std::string_view {
+	return dep.override_find_package_name.empty() ? dep.name : dep.override_find_package_name;
 }
 
 [[nodiscard]]
 auto to_install(context* ctx, const dip::state& state, const dip::dep& dep, const dip::cfg& cfg) -> bool {
 	return
-		!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, dep, cfg);
+		!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, get_find_package_name(dep), cfg);
+}
+
+[[nodiscard]]
+auto to_install(context* ctx, const dip::state& state, const dip::dep& dep) -> bool {
+	for (const auto cfg_name : state.work_to_do.cfgs) {
+		const auto& cfg = get_cfg(state.project_settings, cfg_name);
+		if (to_install(ctx, state, dep, cfg)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+[[nodiscard]]
+auto has_subdependencies_to_process(context* ctx, const dip::state& state, std::string_view project_name) -> bool {
+	const auto search_for = pmr_format(ctx, "{}/", project_name);
+	for (const auto& name : state.work_to_do.process) {
+		if (starts_with(name, search_for)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 [[nodiscard]]
@@ -324,20 +362,26 @@ auto get_dep(dip::state* state, std::string_view name) -> dip::dep* {
 	throw std::runtime_error(std::format("Dependency '{}' not found in registry.", name));
 }
 
-auto update_track_tag(context* ctx, dip::dep* dep, const dip::prog_paths& progs, origin_git_repo git) -> void {
-	ctx->log->dep_task(dep->name, pmr_format(ctx, "Fetching latest commit hash from '{}'", git.url));
+[[nodiscard]]
+auto update_track_commit(context* ctx, dip::dep* dep, const dip::prog_paths& progs, origin_git_tracked_branch git) -> bool {
+	ctx->log->dep_task(dep->name, pmr_format(ctx, "Fetching latest commit from '{}'", git.url));
 	print_and_clear_log(ctx);
-	const auto new_hash = get_latest_git_commit_hash(ctx, progs, git.url);
+	const auto new_hash = get_latest_git_commit_hash(ctx, progs, git.url, git.branch);
 	ctx->log->detail(pmr_format(ctx, "latest commit is '{}'", new_hash));
-	git.tag = new_hash;
-	dep->origin = git;
-	dep->track  = true;
-	ctx->log->dep_task(dep->name, pmr_format(ctx, "Updated tag to '{}'", git.tag));
+	if (new_hash != git.commit) {
+		git.commit = new_hash;
+		dep->origin = git;
+		ctx->log->dep_task(dep->name, pmr_format(ctx, "Updated commit to '{}'", git.commit));
+		return true;
+	}
+	ctx->log->detail("commit is already at latest");
+	return false;
 }
 
-auto update_track_tag(context* ctx, dip::dep* dep, const dip::state& state) -> void {
-	assert (std::holds_alternative<origin_git_repo>(dep->origin));
-	update_track_tag(ctx, dep, state.prog_paths, std::get<origin_git_repo>(dep->origin));
+[[nodiscard]]
+auto update_track_commit(context* ctx, dip::dep* dep, const dip::state& state) -> bool {
+	assert (std::holds_alternative<origin_git_tracked_branch>(dep->origin));
+	return update_track_commit(ctx, dep, state.prog_paths, std::get<origin_git_tracked_branch>(dep->origin));
 }
 
 auto extract_to(context* ctx, const dip::prog_paths& progs, const dip::dep& dep, const std::filesystem::path& archive_path, const std::filesystem::path& dest_dir_path) -> void {
@@ -370,10 +414,17 @@ auto acquire_src_from_origin(context* ctx, dip::dep* dep, const dip::state& stat
 }
 
 auto acquire_src_from_origin(context* ctx, dip::dep* dep, const dip::state& state, const origin_git_repo& origin) -> void {
-	ctx->log->dep_task(dep->name, pmr_format(ctx, "Cloning git repo '{} # {}'", origin.url, origin.tag));
+	ctx->log->dep_task(dep->name, pmr_format(ctx, "Cloning git repo '{} # {}'", origin.url, origin.commit));
 	print_and_clear_log(ctx);
 	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, *dep);
-	git_clone_to(ctx, state.prog_paths, origin.url, origin.tag, src_dir_path);
+	git_clone(ctx, state.prog_paths, origin.url, origin.commit, src_dir_path);
+}
+
+auto acquire_src_from_origin(context* ctx, dip::dep* dep, const dip::state& state, const origin_git_tracked_branch& origin) -> void {
+	ctx->log->dep_task(dep->name, pmr_format(ctx, "Cloning git repo '{} # {}'", origin.url, origin.commit));
+	print_and_clear_log(ctx);
+	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, *dep);
+	git_clone(ctx, state.prog_paths, origin.url, origin.branch, src_dir_path);
 }
 
 auto acquire_src_from_origin(context* ctx, dip::dep* dep, const dip::state& state, const origin_url& origin) -> void {
@@ -438,8 +489,14 @@ auto get_cmake_options_string(context* ctx, os::platform platform, const yml_cma
 	return str;
 }
 
+[[nodiscard]]
+auto decorate_dep_name_if_have_parent(context* ctx, const dip::state& state, std::string_view dep_name) -> std::pmr::string {
+	if (state.project_name.empty()) { return to_pmr_string(ctx, dep_name); }
+	else                            { return pmr_format(ctx, "{} -> {}", state.project_name, dep_name); }
+}
+
 auto configure(context* ctx, const dip::state& state, const dip::dep& dep, const std::filesystem::path& src_dir_path, const std::filesystem::path& bld_dir_path, const dip::cfg& cfg) -> void {
-	ctx->log->dep_cfg_task(dep.name, to_pmr_string(ctx, cfg.name), pmr_format(ctx, "Configure"));
+	ctx->log->dep_cfg_task(decorate_dep_name_if_have_parent(ctx, state, dep.name), to_pmr_string(ctx, cfg.name), pmr_format(ctx, "Configure"));
 	print_and_clear_log(ctx);
 	const auto install_prefix_path = make_install_prefix_path(state.dirs, cfg.name);
 	const auto cmakelists          = find_file_in_dir(ctx, src_dir_path, "CMakeLists.txt");
@@ -451,15 +508,18 @@ auto configure(context* ctx, const dip::state& state, const dip::dep& dep, const
 }
 
 auto build(context* ctx, const dip::state& state, const dip::dep& dep, const std::filesystem::path& bld_dir_path, const dip::cfg& cfg) -> void {
-	ctx->log->dep_cfg_task(dep.name, to_pmr_string(ctx, cfg.name), pmr_format(ctx, "Build"));
+	ctx->log->dep_cfg_task(decorate_dep_name_if_have_parent(ctx, state, dep.name), to_pmr_string(ctx, cfg.name), pmr_format(ctx, "Build"));
 	print_and_clear_log(ctx);
 	cmake_build(ctx, state.prog_paths, bld_dir_path, cfg.cmake_config);
 }
 
 auto install(context* ctx, const dip::state& state, const dip::dep& dep, const std::filesystem::path& bld_dir_path, const dip::cfg& cfg) -> void {
-	ctx->log->dep_cfg_task(dep.name, to_pmr_string(ctx, cfg.name), pmr_format(ctx, "Install"));
+	ctx->log->dep_cfg_task(decorate_dep_name_if_have_parent(ctx, state, dep.name), to_pmr_string(ctx, cfg.name), pmr_format(ctx, "Install"));
 	print_and_clear_log(ctx);
 	cmake_install(ctx, state.prog_paths, bld_dir_path, cfg.cmake_config);
+	if (!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, get_find_package_name(dep), cfg)) {
+		throw std::runtime_error{std::format("CMake could still not find package '{}' after installing it.", dep.name)};
+	}
 }
 
 auto configure_build_install(context* ctx, const dip::state& state, const dip::dep& dep, const dip::cfg& cfg) -> void {
@@ -470,13 +530,28 @@ auto configure_build_install(context* ctx, const dip::state& state, const dip::d
 	install(ctx, state, dep, bld_dir_path, cfg);
 }
 
+auto do_work(context* ctx, dip::state* state) -> void;
+
+auto run_dip_on(context* ctx, const dip::state& state, const dip::dep& dep) -> void {
+	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, dep);
+	if (const auto dip_dir = find_dip_dir(ctx, src_dir_path)) {
+		ctx->log->detail(pmr_format(ctx, "Found '{}' directory at '{}'", DIR_PROJECT_DIP, dip_dir->string()));
+		auto dep_state = make_dependency_processing_state(ctx, state, dep, src_dir_path, *dip_dir);
+		do_work(ctx, &dep_state);
+	}
+}
+
 auto do_process(context* ctx, dip::state* state, std::string_view name) -> void {
 	auto dep = get_dep(state, name);
+	auto updated_track_commit = false;
 	if (to_track(*state, *dep)) {
-		update_track_tag(ctx, dep, *state);
+		updated_track_commit = update_track_commit(ctx, dep, *state);
 	}
-	if (to_acquire(ctx, *state, *dep)) {
+	if (to_acquire(ctx, *state, *dep, updated_track_commit)) {
 		acquire(ctx, dep, *state);
+	}
+	if (to_install(ctx, *state, *dep) || has_subdependencies_to_process(ctx, *state, dep->name)) {
+		run_dip_on(ctx, *state, *dep);
 	}
 	for (const auto cfg_name : state->work_to_do.cfgs) {
 		const auto& cfg = get_cfg(state->project_settings, cfg_name);
@@ -484,12 +559,25 @@ auto do_process(context* ctx, dip::state* state, std::string_view name) -> void 
 			configure_build_install(ctx, *state, *dep, cfg);
 		}
 	}
-	ctx->log->dep_task(dep->name, "Ready");
+	ctx->log->dep_task(decorate_dep_name_if_have_parent(ctx, *state, dep->name), "Ready");
+}
+
+auto install_self(context* ctx, const dip::state& state, const dep& self) -> void {
+	for (const auto cfg_name : state.work_to_do.cfgs) {
+		const auto& cfg = get_cfg(state.project_settings, cfg_name);
+		if (!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, state.project_name, cfg)) {
+			configure_build_install(ctx, state, self, cfg);
+		}
+	}
 }
 
 auto do_work(context* ctx, dip::state* state) -> void {
 	for (const auto& name : state->work_to_do.process) {
+		print_and_clear_log(ctx);
 		do_process(ctx, state, name);
+	}
+	if (state->work_to_do.self_to_install) {
+		install_self(ctx, *state, *state->work_to_do.self_to_install);
 	}
 	save_to(ctx, state->registry, state->project_settings.registry_path);
 }

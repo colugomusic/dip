@@ -67,4 +67,9 @@ auto split_csv(const context* ctx, std::string_view str) -> std::pmr::vector<std
 	return list;
 }
 
+[[nodiscard]]
+auto starts_with(std::string_view haystack, std::string_view needle) -> bool {
+	return haystack.size() >= needle.size() && haystack.substr(0, needle.size()) == needle;
+}
+
 } // dip

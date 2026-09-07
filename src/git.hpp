@@ -7,8 +7,8 @@
 namespace dip {
 
 [[nodiscard]]
-auto get_latest_git_commit_hash(context* ctx, const dip::prog_paths& progs, std::string_view url) -> std::pmr::string {
-	const auto args     = pmr_format(ctx, "ls-remote {} HEAD", url);
+auto get_latest_git_commit_hash(context* ctx, const dip::prog_paths& progs, std::string_view url, std::string_view branch) -> std::pmr::string {
+	const auto args     = pmr_format(ctx, "ls-remote {} {}", url, branch);
 	const auto prog_out = run_process_and_return_stdout(ctx, progs.git, args);
 	return get_first_word(ctx, prog_out);
 }
@@ -16,11 +16,11 @@ auto get_latest_git_commit_hash(context* ctx, const dip::prog_paths& progs, std:
 [[nodiscard]] auto fn_proc_git(context* ctx, std::filesystem::path git)        { return [ctx, git](std::string_view args) { return run_process_and_return_exit_status(ctx, git, args) == 0; }; }
 [[nodiscard]] auto fn_proc_git_stdout(context* ctx, std::filesystem::path git) { return [ctx, git](std::string_view args) { return run_process_and_return_stdout(ctx, git, args); }; }
 
-auto git_checkout(context* ctx, const std::filesystem::path& git, const std::filesystem::path& repo, std::string_view tag) -> void {
+auto git_checkout(context* ctx, const std::filesystem::path& git, const std::filesystem::path& repo, std::string_view revision) -> void {
 	const auto fn_git = fn_proc_git(ctx, git);
-	const auto args   = pmr_format(ctx, "-C {} checkout {}", repo.string(), tag);
+	const auto args   = pmr_format(ctx, "-C {} checkout {}", repo.string(), revision);
 	if (!fn_git(args)) {
-		throw std::runtime_error{std::format("Failed to checkout git repo at '{}' to tag '{}'", repo.string(), tag)};
+		throw std::runtime_error{std::format("Failed to checkout git repo at '{}' to revision '{}'", repo.string(), revision)};
 	}
 }
 
@@ -80,20 +80,14 @@ auto git_get_current_branch(context* ctx, const dip::prog_paths& progs, const st
 }
 
 [[nodiscard]]
-auto reset_existing_git_repo(context* ctx, const dip::prog_paths& progs, std::string_view tag, const std::filesystem::path& dir) -> bool {
+auto reset_existing_git_repo_to_commit(context* ctx, const dip::prog_paths& progs, std::string_view commit, const std::filesystem::path& dir) -> bool {
 	try {
 		ctx->log->detail(pmr_format(ctx, "Resetting existing git repo at '{}'", dir.string()));
 		git_reset_hard(ctx, progs.git, dir);
 		git_clean(ctx, progs.git, dir);
 		git_fetch_origin(ctx, progs.git, dir);
-		if (!tag.empty()) {
-			git_checkout(ctx, progs.git, dir, tag);
-		}
-		else {
-			const auto head = git_get_current_branch(ctx, progs, dir);
-			if (head.empty()) { git_reset_hard_origin_branch(ctx, progs.git, dir, "HEAD"); }
-			else              { git_reset_hard_origin_branch(ctx, progs.git, dir, head); }
-		}
+		git_checkout(ctx, progs.git, dir, commit);
+		git_reset_hard(ctx, progs.git, dir);
 		git_submodule_update_init_recursive(ctx, progs.git, dir);
 		return true;
 	}
@@ -107,28 +101,28 @@ auto reset_existing_git_repo(context* ctx, const dip::prog_paths& progs, std::st
 	}
 }
 
-auto nuke_and_reclone(context* ctx, const dip::prog_paths& progs, std::string_view url, std::string_view tag, const std::filesystem::path& dest) -> void {
+auto nuke_and_reclone(context* ctx, const dip::prog_paths& progs, std::string_view url, std::string_view revision, const std::filesystem::path& dest) -> void {
 	if (std::filesystem::exists(dest)) {
 		ctx->log->detail(pmr_format(ctx, "Removing existing directory at '{}'", dest.string()));
 		std::filesystem::remove_all(dest);
 	}
 	ctx->log->detail(pmr_format(ctx, "Cloning git repo from '{}' to '{}'", url, dest.string()));
 	git_clone(ctx, progs.git, url, dest);
-	if (!tag.empty()) {
-		git_checkout(ctx, progs.git, dest, tag);
+	if (!revision.empty()) {
+		git_checkout(ctx, progs.git, dest, revision);
 	}
 	git_submodule_update_init_recursive(ctx, progs.git, dest);
 }
 
-auto git_clone_to(context* ctx, const dip::prog_paths& progs, std::string_view url, std::string_view tag, const std::filesystem::path& dest) -> void {
+auto git_clone(context* ctx, const dip::prog_paths& progs, std::string_view url, std::string_view commit, const std::filesystem::path& dest) -> void {
 	if (std::filesystem::exists(dest / ".git")) {
-		if (reset_existing_git_repo(ctx, progs, tag, dest)) {
+		if (reset_existing_git_repo_to_commit(ctx, progs, commit, dest)) {
 			return;
 		}
 	}
 	// Either isn't an existing repo or we failed to reset it for some reason.
 	// Just nuke it and re-clone.
-	nuke_and_reclone(ctx, progs, url, tag, dest);
+	nuke_and_reclone(ctx, progs, url, commit, dest);
 }
 
 } // dip
