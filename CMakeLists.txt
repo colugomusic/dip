@@ -6,6 +6,7 @@ set(is_windows "$<PLATFORM_ID:Windows>")
 set(is_unix    "$<OR:${is_linux},${is_macos}>")
 add_library(argparse INTERFACE)
 add_library(fkyaml INTERFACE)
+add_library(hash-library STATIC)
 add_library(tiny-process-library STATIC)
 add_executable(dip)
 target_sources(argparse INTERFACE
@@ -18,6 +19,14 @@ target_sources(fkyaml INTERFACE
 	BASE_DIRS src/extern
 	FILES     src/extern/fkYAML/fkyaml_fwd.hpp
 	          src/extern/fkYAML/node.hpp
+)
+target_sources(hash-library PRIVATE
+	src/extern/hash-library-md5.cpp
+)
+target_sources(hash-library INTERFACE
+	FILE_SET  HEADERS
+	BASE_DIRS src/extern
+	FILES     src/extern/hash-library-md5.h
 )
 target_sources(tiny-process-library PRIVATE
 	src/extern/tiny-process-library/process.cpp
@@ -41,6 +50,7 @@ target_sources(dip PRIVATE
 	src/git.hpp
 	src/list-util.hpp
 	src/main.cpp
+	src/md5.hpp
 	src/os.hpp
 	src/pmr-format.hpp
 	src/proc.hpp
@@ -56,5 +66,6 @@ target_sources(dip PRIVATE
 target_link_libraries(dip PRIVATE
 	argparse
 	fkyaml
+	hash-library
 	tiny-process-library
 )

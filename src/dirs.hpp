@@ -18,7 +18,7 @@ auto make_pkg_check_dir_path(const dip::dirs& dirs) -> std::filesystem::path {
 }
 
 [[nodiscard]]
-auto make_install_dir_path(const dip::dirs& dirs, std::string_view cfg) -> std::filesystem::path {
+auto make_install_prefix_path(const dip::dirs& dirs, std::string_view cfg) -> std::filesystem::path {
 	return dirs.root / "install" / cfg;
 }
 
@@ -43,8 +43,8 @@ auto make_dir_name(context* ctx, const dip::origin& origin) -> std::filesystem::
 }
 
 [[nodiscard]]
-auto make_bld_dir_path(context* ctx, const dip::dirs& dirs, const dip::dep& dep) -> std::filesystem::path {
-	return dirs.cache / dep.name / make_dir_name(ctx, dep.origin) / "bld";
+auto make_bld_dir_path(context* ctx, const dip::dirs& dirs, const dip::dep& dep, std::string_view cfg) -> std::filesystem::path {
+	return dirs.cache / dep.name / make_dir_name(ctx, dep.origin) / "bld" / cfg;
 }
 
 [[nodiscard]]

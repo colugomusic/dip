@@ -15,12 +15,14 @@
 
 namespace dip::os {
 
+namespace { // -----------------------------------------------------------------------------------------------
+
 struct program_info {
 	std::string_view name;
 	std::string_view download_help;
 };
 
-static const auto PROGRAM_INFO = std::array{
+const auto PROGRAM_INFO = std::array{
 	program_info{
 		.name          = "cmake",
 		.download_help = "You can download git for Windows from https://cmake.org/download/ or by installing a package manager like Chocolatey (https://chocolatey.org/) and running `choco install cmake`.",
@@ -39,7 +41,7 @@ static const auto PROGRAM_INFO = std::array{
 	},
 };
 
-[[nodiscard]] static
+[[nodiscard]]
 auto shorten(std::wstring_view wide) -> std::string {
 	if (wide.empty()) {
 		return {};
@@ -51,7 +53,7 @@ auto shorten(std::wstring_view wide) -> std::string {
 	return buf;
 }
 
-[[nodiscard]] static
+[[nodiscard]]
 auto get_known_folder(REFKNOWNFOLDERID folder_id) -> std::optional<std::filesystem::path> {
 	struct scope_co_free {
 		LPWSTR pointer = NULL;
@@ -67,9 +69,15 @@ auto get_known_folder(REFKNOWNFOLDERID folder_id) -> std::optional<std::filesyst
 	return shorten(wsz_path);
 }
 
-[[nodiscard]] static
+[[nodiscard]]
 auto is_executable(const std::filesystem::path& path) -> bool {
 	return std::filesystem::is_regular_file(path) && path.extension() == ".exe";
+}
+
+} // ---------------------------------------------------------------------------------------------------------
+
+auto get_platform() -> platform {
+	return platform::win;
 }
 
 auto get_env_paths(mem_res* mem) -> std::pmr::vector<std::filesystem::path> {
