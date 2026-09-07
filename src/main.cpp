@@ -15,10 +15,6 @@ namespace dip {
 
 auto operator""_MB(uint64_t v) -> uint64_t { return 1024 * 1024 * v; }
 
-struct file_paths {
-	std::filesystem::path project_settings_yml;
-};
-
 struct work_to_do {
 	std::pmr::vector<std::pmr::string> cfgs;
 	std::pmr::vector<std::pmr::string> process;
@@ -33,15 +29,19 @@ struct work_requested {
 	std::pmr::vector<std::pmr::string> reacquire;
 };
 
+struct work_done {
+	bool at_least_one_dep_was_installed = false;
+};
+
 struct state {
 	dip::dirs dirs;
-	dip::file_paths file_paths;
 	dip::prog_paths prog_paths;
 	std::pmr::string project_name;
 	yml_project_settings project_settings;
 	yml_registry registry;
 	dip::work_requested work_requested;
 	dip::work_to_do work_to_do;
+	dip::work_done work_done;
 	bool verbose = false;
 };
 
@@ -239,28 +239,28 @@ auto make_self_dep(const dip::state& state) -> dep {
 }
 
 auto init_state(context* ctx, dip::state* state, const dip::args& args, const requirements& reqs) -> void {
-	state->dirs                            = get_dirs(ctx, args);
-	state->file_paths.project_settings_yml = state->dirs.dip / FILENAME_SETTINGS_YML;
-	state->project_settings                = read_project_settings_yml(ctx, state->dirs.dip, state->file_paths.project_settings_yml);
-	state->work_requested                  = get_work_requested(args);
-	state->verbose                         = args.verbose.v;
-	state->prog_paths                      = get_prog_paths(reqs);
-	state->registry                        = read_registry_yml(ctx, state->project_settings.registry_path);
-	state->work_to_do                      = get_work_to_do(ctx, state->project_settings, state->registry, state->work_requested);
+	state->dirs             = get_dirs(ctx, args);
+	state->project_settings = read_project_settings_yml(ctx, state->dirs.dip, state->dirs.dip / FILENAME_SETTINGS_YML);
+	state->work_requested   = get_work_requested(args);
+	state->verbose          = args.verbose.v;
+	state->prog_paths       = get_prog_paths(reqs);
+	state->registry         = read_registry_yml(ctx, state->project_settings.registry_path);
+	state->work_to_do       = get_work_to_do(ctx, state->project_settings, state->registry, state->work_requested);
 	if (args.install_self.v) {
 		state->work_to_do.self_to_install = make_self_dep(*state);
 	}
 }
 
-auto make_dependency_processing_state(context* ctx, dip::state parent_state, const dip::dep& dep, const std::filesystem::path& src_dir, const std::filesystem::path& dip_dir) -> dip::state {
+auto make_dependency_subprocessing_state(context* ctx, dip::state parent_state, const dip::dep& dep, const std::filesystem::path& src_dir, const std::filesystem::path& dip_dir) -> dip::state {
+	// Start by inheriting everything from the parent.
 	auto state = std::move(parent_state);
-	state.dirs.project                    = src_dir;
-	state.dirs.dip                        = dip_dir;
-	state.file_paths.project_settings_yml = state.dirs.dip / FILENAME_SETTINGS_YML;
-	state.project_settings                = read_project_settings_yml(ctx, state.dirs.dip, state.file_paths.project_settings_yml);
-	state.registry                        = read_registry_yml(ctx, state.project_settings.registry_path);
-	state.work_to_do                      = get_work_to_do(ctx, state.project_settings, state.registry, state.work_requested);
-	state.work_to_do.self_to_install      = dep;
+	// Then override stuff.
+	const auto project_settings = read_project_settings_yml(ctx, dip_dir, dip_dir / FILENAME_SETTINGS_YML);
+	state.dirs.project               = src_dir;
+	state.dirs.dip                   = dip_dir;
+	state.registry                   = read_registry_yml(ctx, project_settings.registry_path);
+	state.work_to_do                 = get_work_to_do(ctx, state.project_settings, state.registry, state.work_requested);
+	state.work_to_do.self_to_install = dep;
 	return state;
 }
 
@@ -344,17 +344,6 @@ auto to_install(context* ctx, const dip::state& state, const dip::dep& dep) -> b
 }
 
 [[nodiscard]]
-auto has_subdependencies_to_process(context* ctx, const dip::state& state, std::string_view project_name) -> bool {
-	const auto search_for = pmr_format(ctx, "{}/", project_name);
-	for (const auto& name : state.work_to_do.process) {
-		if (starts_with(name, search_for)) {
-			return true;
-		}
-	}
-	return false;
-}
-
-[[nodiscard]]
 auto get_dep(dip::state* state, std::string_view name) -> dip::dep* {
 	if (auto pos = std::ranges::find_if(state->registry.deps, fn_dep_name_is(name)); pos != std::cend(state->registry.deps)) {
 		return &*pos;
@@ -424,7 +413,7 @@ auto acquire_src_from_origin(context* ctx, dip::dep* dep, const dip::state& stat
 	ctx->log->dep_task(dep->name, pmr_format(ctx, "Cloning git repo '{} # {}'", origin.url, origin.commit));
 	print_and_clear_log(ctx);
 	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, *dep);
-	git_clone(ctx, state.prog_paths, origin.url, origin.branch, src_dir_path);
+	git_clone(ctx, state.prog_paths, origin.url, origin.commit, src_dir_path);
 }
 
 auto acquire_src_from_origin(context* ctx, dip::dep* dep, const dip::state& state, const origin_url& origin) -> void {
@@ -532,13 +521,16 @@ auto configure_build_install(context* ctx, const dip::state& state, const dip::d
 
 auto do_work(context* ctx, dip::state* state) -> void;
 
-auto run_dip_on(context* ctx, const dip::state& state, const dip::dep& dep) -> void {
+[[nodiscard]]
+auto run_dip_on(context* ctx, const dip::state& state, const dip::dep& dep) -> bool {
 	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, dep);
 	if (const auto dip_dir = find_dip_dir(ctx, src_dir_path)) {
 		ctx->log->detail(pmr_format(ctx, "Found '{}' directory at '{}'", DIR_PROJECT_DIP, dip_dir->string()));
-		auto dep_state = make_dependency_processing_state(ctx, state, dep, src_dir_path, *dip_dir);
+		auto dep_state = make_dependency_subprocessing_state(ctx, state, dep, src_dir_path, *dip_dir);
 		do_work(ctx, &dep_state);
+		return true;
 	}
+	return false;
 }
 
 auto do_process(context* ctx, dip::state* state, std::string_view name) -> void {
@@ -550,22 +542,28 @@ auto do_process(context* ctx, dip::state* state, std::string_view name) -> void 
 	if (to_acquire(ctx, *state, *dep, updated_track_commit)) {
 		acquire(ctx, dep, *state);
 	}
-	if (to_install(ctx, *state, *dep) || has_subdependencies_to_process(ctx, *state, dep->name)) {
-		run_dip_on(ctx, *state, *dep);
+	if (run_dip_on(ctx, *state, *dep)) {
+		ctx->log->dep_task(decorate_dep_name_if_have_parent(ctx, *state, dep->name), "Ready");
+		return;
 	}
 	for (const auto cfg_name : state->work_to_do.cfgs) {
 		const auto& cfg = get_cfg(state->project_settings, cfg_name);
 		if (to_install(ctx, *state, *dep, cfg)) {
 			configure_build_install(ctx, *state, *dep, cfg);
+			state->work_done.at_least_one_dep_was_installed = true;
 		}
 	}
 	ctx->log->dep_task(decorate_dep_name_if_have_parent(ctx, *state, dep->name), "Ready");
+	// @TODO: remove this line
+	save_to(ctx, state->registry, state->project_settings.registry_path);
 }
 
 auto install_self(context* ctx, const dip::state& state, const dep& self) -> void {
 	for (const auto cfg_name : state.work_to_do.cfgs) {
 		const auto& cfg = get_cfg(state.project_settings, cfg_name);
-		if (!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, state.project_name, cfg)) {
+		const auto package_found  = cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, cfg.name, cfg);
+		const auto deps_installed = state.work_done.at_least_one_dep_was_installed;
+		if (deps_installed || !package_found) {
 			configure_build_install(ctx, state, self, cfg);
 		}
 	}
