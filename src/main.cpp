@@ -1,10 +1,12 @@
 #include "args.hpp"
 #include "cmake.hpp"
+#include "cmake-options.hpp"
 #include "colors.hpp"
 #include "list-util.hpp"
 #include "git.hpp"
 #include "md5.hpp"
 #include "requirements.hpp"
+#include "version.hpp"
 #include "wget.hpp"
 #include "yaml.hpp"
 #include "zip.hpp"
@@ -431,54 +433,6 @@ auto acquire(context* ctx, dip::dep* dep, const dip::state& state) -> void {
 }
 
 [[nodiscard]]
-auto get_cmake_options_list_mac(context* ctx, const yml_cmake_options& project_options, const dep_cmake_options& dep_options) -> std::pmr::vector<std::pmr::string> {
-	auto list = std::pmr::vector<std::pmr::string>{ctx->mem};
-	if (!project_options.any.empty()) { list.push_back(project_options.any); }
-	if (!project_options.mac.empty()) { list.push_back(project_options.mac); }
-	if (!dep_options.any.empty())     { list.push_back(dep_options.any); }
-	if (!dep_options.mac.empty())     { list.push_back(dep_options.mac); }
-	return list;
-}
-
-[[nodiscard]]
-auto get_cmake_options_list_lin(context* ctx, const yml_cmake_options& project_options, const dep_cmake_options& dep_options) -> std::pmr::vector<std::pmr::string> {
-	auto list = std::pmr::vector<std::pmr::string>{ctx->mem};
-	if (!project_options.any.empty()) { list.push_back(project_options.any); }
-	if (!project_options.lin.empty()) { list.push_back(project_options.lin); }
-	if (!dep_options.any.empty())     { list.push_back(dep_options.any); }
-	if (!dep_options.lin.empty())     { list.push_back(dep_options.lin); }
-	return list;
-}
-
-[[nodiscard]]
-auto get_cmake_options_list_win(context* ctx, const yml_cmake_options& project_options, const dep_cmake_options& dep_options) -> std::pmr::vector<std::pmr::string> {
-	auto list = std::pmr::vector<std::pmr::string>{ctx->mem};
-	if (!project_options.any.empty()) { list.push_back(project_options.any); }
-	if (!project_options.win.empty()) { list.push_back(project_options.win); }
-	if (!dep_options.any.empty())     { list.push_back(dep_options.any); }
-	if (!dep_options.win.empty())     { list.push_back(dep_options.win); }
-	return list;
-}
-
-[[nodiscard]]
-auto get_cmake_options_list(context* ctx, os::platform platform, const yml_cmake_options& project_options, const dep_cmake_options& dep_options) -> std::pmr::vector<std::pmr::string> {
-	switch (platform) {
-		case os::platform::mac: { return get_cmake_options_list_mac(ctx, project_options, dep_options); }
-		case os::platform::lin: { return get_cmake_options_list_lin(ctx, project_options, dep_options); }
-		case os::platform::win: { return get_cmake_options_list_win(ctx, project_options, dep_options); }
-		default:                { throw std::runtime_error{"Invalid platform."}; }
-	}
-}
-
-[[nodiscard]]
-auto get_cmake_options_string(context* ctx, os::platform platform, const yml_cmake_options& project_options, const dep_cmake_options& dep_options) -> std::pmr::string {
-	const auto list = get_cmake_options_list(ctx, platform, project_options, dep_options);
-	auto str = join<std::pmr::string>(ctx, list, " ");
-	std::replace(str.begin(), str.end(), '\n', ' ');
-	return str;
-}
-
-[[nodiscard]]
 auto decorate_dep_name_if_have_parent(context* ctx, const dip::state& state, std::string_view dep_name) -> std::pmr::string {
 	if (state.project_name.empty()) { return to_pmr_string(ctx, dep_name); }
 	else                            { return pmr_format(ctx, "{} -> {}", state.project_name, dep_name); }
@@ -539,6 +493,7 @@ auto do_process(context* ctx, dip::state* state, std::string_view name) -> void 
 	if (to_track(*state, *dep)) {
 		updated_track_commit = update_track_commit(ctx, dep, *state);
 	}
+	// @TODO: make version string here
 	if (to_acquire(ctx, *state, *dep, updated_track_commit)) {
 		acquire(ctx, dep, *state);
 	}

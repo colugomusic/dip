@@ -51,6 +51,31 @@ auto trim(std::string_view v) -> std::string_view {
 }
 
 [[nodiscard]]
+auto split_by_whitespace(const context* ctx, std::string_view str) -> std::pmr::vector<std::pmr::string> {
+	static constexpr auto WHITESPACE_CHARACTERS = " \t\n\r\f\v";
+	auto list = std::pmr::vector<std::pmr::string>{ctx->mem};
+	while (!str.empty()) {
+		const auto first = str.find_first_not_of(WHITESPACE_CHARACTERS);
+		if (first == std::string_view::npos) {
+			break;
+		}
+		str.remove_prefix(first);
+		const auto last = str.find_first_of(WHITESPACE_CHARACTERS);
+		list.emplace_back(str.substr(0, last));
+		if (last == std::string_view::npos) {
+			break;
+		}
+		str.remove_prefix(last);
+	}
+	return list;
+}
+
+[[nodiscard]]
+auto fn_split_by_whitespace(const context* ctx) {
+	return [ctx](std::string_view str) { return split_by_whitespace(ctx, str); };
+}
+
+[[nodiscard]]
 auto split_csv(const context* ctx, std::string_view str) -> std::pmr::vector<std::pmr::string> {
 	auto list  = std::pmr::vector<std::pmr::string>{ctx->mem};
 	auto start = std::string_view::size_type{0};

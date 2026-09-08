@@ -1,26 +1,23 @@
+#pragma once
+
 #include "cfg.hpp"
+#include "cmake-options.hpp"
 #include "const-strings.hpp"
 #include "context.hpp"
 #include "dep.hpp"
 #include "fs.hpp"
 #include "pmr-format.hpp"
+#include "string-util.hpp"
 #include <fkYAML/node.hpp>
 
 namespace dip {
 
 using node_t = fkyaml::basic_node<std::vector, std::unordered_map>;
 
-struct yml_cmake_options {
-	std::pmr::string any;
-	std::pmr::string mac;
-	std::pmr::string lin;
-	std::pmr::string win;
-};
-
 struct yml_project_settings {
 	std::pmr::string name;
 	std::filesystem::path registry_path;
-	yml_cmake_options cmake_options;
+	dip::cmake_options cmake_options;
 	std::pmr::vector<dip::cfg> cfgs;
 };
 
@@ -197,16 +194,22 @@ auto make_default_registry_yml_file_path(const std::filesystem::path& dip_dir) -
 }
 
 [[nodiscard]]
-auto find_cmake_options(context* ctx, const node_t& mapping) -> yml_cmake_options {
-	auto cmake_options_any = find_string(ctx, mapping, KEY_CMAKE_OPTIONS);
-	auto cmake_options_mac = find_string(ctx, mapping, KEY_CMAKE_OPTIONS_MAC);
-	auto cmake_options_lin = find_string(ctx, mapping, KEY_CMAKE_OPTIONS_LIN);
-	auto cmake_options_win = find_string(ctx, mapping, KEY_CMAKE_OPTIONS_WIN);
+auto find_cmake_options(context* ctx, const node_t& mapping) -> cmake_options {
+	auto fn_str_to_list         = fn_split_by_whitespace(ctx);
+	auto empty_list             = std::pmr::vector<std::pmr::string>{ctx->mem};
+	auto cmake_options_any_str  = find_string(ctx, mapping, KEY_CMAKE_OPTIONS);
+	auto cmake_options_mac_str  = find_string(ctx, mapping, KEY_CMAKE_OPTIONS_MAC);
+	auto cmake_options_lin_str  = find_string(ctx, mapping, KEY_CMAKE_OPTIONS_LIN);
+	auto cmake_options_win_str  = find_string(ctx, mapping, KEY_CMAKE_OPTIONS_WIN);
+	auto cmake_options_any_list = cmake_options_any_str.transform(fn_str_to_list).value_or(empty_list);
+	auto cmake_options_mac_list = cmake_options_mac_str.transform(fn_str_to_list).value_or(empty_list);
+	auto cmake_options_lin_list = cmake_options_lin_str.transform(fn_str_to_list).value_or(empty_list);
+	auto cmake_options_win_list = cmake_options_win_str.transform(fn_str_to_list).value_or(empty_list);
 	return {
-		.any = cmake_options_any.value_or(std::pmr::string{ctx->mem}),
-		.mac = cmake_options_mac.value_or(std::pmr::string{ctx->mem}),
-		.lin = cmake_options_lin.value_or(std::pmr::string{ctx->mem}),
-		.win = cmake_options_win.value_or(std::pmr::string{ctx->mem}),
+		.any = cmake_options_any_list,
+		.mac = cmake_options_mac_list,
+		.lin = cmake_options_lin_list,
+		.win = cmake_options_win_list,
 	};
 }
 
@@ -234,20 +237,11 @@ auto read_dep_yml(context* ctx, const node_t& mapping) -> dip::dep {
 	if (!mapping.contains(KEY_NAME)) { throw std::runtime_error{std::format("Each item in the registry must contain a '{}' key.", KEY_NAME)}; }
 	auto name                       = to_pmr_string(ctx, mapping, KEY_NAME);
 	auto origin                     = find_origin(ctx, mapping);
-	auto cmake_options_any          = find_string(ctx, mapping, KEY_CMAKE_OPTIONS);
-	auto cmake_options_mac          = find_string(ctx, mapping, KEY_CMAKE_OPTIONS_MAC);
-	auto cmake_options_lin          = find_string(ctx, mapping, KEY_CMAKE_OPTIONS_LIN);
-	auto cmake_options_win          = find_string(ctx, mapping, KEY_CMAKE_OPTIONS_WIN);
 	auto override_find_package_name = find_string(ctx, mapping, KEY_OVERRIDE_FIND_PACKAGE_NAME);
 	return dip::dep {
-		.name   = std::move(name),
-		.origin = std::move(origin),
-		.cmake_options = {
-			.any = cmake_options_any.value_or(std::pmr::string{ctx->mem}),
-			.mac = cmake_options_mac.value_or(std::pmr::string{ctx->mem}),
-			.lin = cmake_options_lin.value_or(std::pmr::string{ctx->mem}),
-			.win = cmake_options_win.value_or(std::pmr::string{ctx->mem}),
-		},
+		.name                       = std::move(name),
+		.origin                     = std::move(origin),
+		.cmake_options              = find_cmake_options(ctx, mapping),
 		.override_find_package_name = override_find_package_name.value_or(std::pmr::string{ctx->mem})
 	};
 }

@@ -42,6 +42,7 @@ target_sources(dip PRIVATE
 	src/args.hpp
 	src/cfg.hpp
 	src/cmake.hpp
+	src/cmake-options.hpp
 	src/const-strings.hpp
 	src/context.hpp
 	src/dep.hpp
@@ -57,6 +58,7 @@ target_sources(dip PRIVATE
 	src/progs.hpp
 	src/requirements.hpp
 	src/string-util.hpp
+	src/version.hpp
 	src/yaml.hpp
 	src/wget.hpp
 	$<${is_linux}:src/os-lin.cpp>
