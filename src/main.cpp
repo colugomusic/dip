@@ -22,6 +22,7 @@ struct work_to_do {
 	std::pmr::vector<std::pmr::string> process;
 	std::pmr::vector<std::pmr::string> track;
 	std::pmr::vector<std::pmr::string> reacquire;
+	std::pmr::vector<std::pmr::string> reinstall;
 	std::optional<dip::dep> self_to_install;
 };
 
@@ -29,6 +30,7 @@ struct work_requested {
 	std::pmr::vector<std::pmr::string> cfg;
 	std::pmr::vector<std::pmr::string> track;
 	std::pmr::vector<std::pmr::string> reacquire;
+	std::pmr::vector<std::pmr::string> reinstall;
 };
 
 struct work_done {
@@ -153,11 +155,13 @@ auto get_cmake_configs_to_process(context*, const yml_project_settings& settings
 auto get_work_to_do(context* ctx, const yml_project_settings& settings, const yml_registry& registry, const dip::work_requested& work_requested) -> work_to_do {
 	auto track     = expand_track(ctx, registry, work_requested.track);
 	auto reacquire = work_requested.reacquire;
+	auto reinstall = work_requested.reinstall;
 	return work_to_do{
 		.cmake_configs = get_cmake_configs_to_process(ctx, settings, work_requested),
 		.process       = sort_deps_into_processing_order(get_dep_names(ctx, registry), registry),
 		.track         = sort_and_remove_duplicates(ctx, track),
-		.reacquire     = sort_and_remove_duplicates(ctx, reacquire)
+		.reacquire     = sort_and_remove_duplicates(ctx, reacquire),
+		.reinstall     = sort_and_remove_duplicates(ctx, reinstall),
 	};
 }
 
@@ -216,6 +220,7 @@ auto get_work_requested(const dip::args& args) -> dip::work_requested {
 		.cfg          = args.cfg.v,
 		.track        = args.track.v,
 		.reacquire    = args.reacquire.v,
+		.reinstall    = args.reinstall.v,
 	};
 }
 
@@ -297,6 +302,11 @@ auto user_requested_reacquire(const dip::state& state, std::string_view name) ->
 }
 
 [[nodiscard]]
+auto user_requested_reinstall(const dip::state& state, std::string_view name) -> bool {
+	return std::ranges::binary_search(state.work_to_do.reinstall, name);
+}
+
+[[nodiscard]]
 auto user_requested_track(context*, const dip::state& state, std::string_view name) -> bool {
 	return std::ranges::binary_search(state.work_to_do.track, name);
 }
@@ -315,13 +325,6 @@ auto have_source_code(context* ctx, const dip::state& state, std::string_view de
 }
 
 [[nodiscard]]
-auto to_acquire(context* ctx, const dip::state& state, std::string_view dep_name, std::string_view version) -> bool {
-	return
-		!have_source_code(ctx, state, dep_name, version) ||
-		user_requested_reacquire(state, dep_name);
-}
-
-[[nodiscard]]
 auto to_track(context* ctx, const dip::state& state, const dip::dep& dep) -> bool {
 	const auto empty_track_commit = has_empty_track_commit(dep);
 	const auto user_requested     = user_requested_track(ctx, state, dep.name);
@@ -330,9 +333,17 @@ auto to_track(context* ctx, const dip::state& state, const dip::dep& dep) -> boo
 }
 
 [[nodiscard]]
+auto to_acquire(context* ctx, const dip::state& state, std::string_view dep_name, std::string_view version) -> bool {
+	return
+		!have_source_code(ctx, state, dep_name, version) ||
+		user_requested_reacquire(state, dep_name);
+}
+
+[[nodiscard]]
 auto to_install(context* ctx, const dip::state& state, std::string_view dep_name, std::string_view cmake_config) -> bool {
 	return
-		!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, dep_name, cmake_config);
+		!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, dep_name, cmake_config) ||
+		user_requested_reinstall(state, dep_name);
 }
 
 [[nodiscard]]
