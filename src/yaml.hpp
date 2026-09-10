@@ -16,7 +16,6 @@ using node_t = fkyaml::basic_node<std::vector, std::unordered_map>;
 
 struct yml_project_settings {
 	std::pmr::string name;
-	std::filesystem::path registry_path;
 	dip::cmake_options cmake_options;
 	std::pmr::vector<dip::cfg> cfgs;
 };
@@ -145,20 +144,6 @@ auto find_bool(context*, const node_t& mapping, std::string_view key) -> std::op
 }
 
 [[nodiscard]]
-auto get_registry_path_from_yaml_or_use_default(context* ctx, const node_t& root, const std::filesystem::path& settings_yml_file_path, const std::filesystem::path& default_registry_yml_file_path) -> std::filesystem::path {
-	if (root.contains(KEY_REGISTRY)) {
-		return {to_pmr_string(ctx, root, KEY_REGISTRY)};
-	}
-	ctx->log->info(pmr_format(ctx,
-		"No '{}' key was found in '{}'.\n"
-		"I'm going to assume there's a registry at '{}'.",
-		KEY_REGISTRY,
-		settings_yml_file_path.string(),
-		default_registry_yml_file_path.string()));
-	return default_registry_yml_file_path;
-}
-
-[[nodiscard]]
 auto get_cfg_list_from_yaml_or_use_default(context* ctx, const node_t& root, std::pmr::vector<dip::cfg> default_cfgs) -> std::pmr::vector<dip::cfg> {
 	auto list = std::pmr::vector<dip::cfg>{ctx->mem};
 	if (root.contains(KEY_CFGS)) {
@@ -176,7 +161,7 @@ auto get_cfg_list_from_yaml_or_use_default(context* ctx, const node_t& root, std
 			}
 			const auto name = it.key().get_value<std::string>();
 			const auto cmake_config = to_pmr_string(ctx, cfg_node, KEY_CMAKE_CONFIG);
-			ctx->log->info(pmr_format(ctx, "Found cfg '{}' with cmake config '{}'", name, cmake_config));
+			ctx->log->detail(pmr_format(ctx, "Found cfg '{}' with cmake config '{}'", name, cmake_config));
 			list.push_back(dip::cfg{
 				.name         = std::pmr::string{name, ctx->mem},
 				.cmake_config = cmake_config
@@ -186,11 +171,6 @@ auto get_cfg_list_from_yaml_or_use_default(context* ctx, const node_t& root, std
 	}
 	ctx->log->info(pmr_format(ctx, "No '{}' key was found in project settings, so using default cfg list: dbg,rel", KEY_CFGS));
 	return default_cfgs;
-}
-
-[[nodiscard]]
-auto make_default_registry_yml_file_path(const std::filesystem::path& dip_dir) -> std::filesystem::path {
-	return dip_dir / FILENAME_REGISTRY_YML;
 }
 
 [[nodiscard]]
@@ -222,7 +202,6 @@ auto read_project_settings_yml(context* ctx, const std::filesystem::path& dip_di
 			const auto node = node_t::deserialize(*text);
 			return yml_project_settings {
 				.name          = find_string(ctx, node, KEY_NAME).value_or({}),
-				.registry_path = get_registry_path_from_yaml_or_use_default(ctx, node, path, make_default_registry_yml_file_path(dip_dir)),
 				.cmake_options = find_cmake_options(ctx, node),
 				.cfgs          = get_cfg_list_from_yaml_or_use_default(ctx, node, make_default_cfg_list(ctx))
 			};
@@ -236,14 +215,12 @@ auto read_project_settings_yml(context* ctx, const std::filesystem::path& dip_di
 auto read_dep_yml(context* ctx, const node_t& mapping) -> dip::dep {
 	if (!mapping.is_mapping())       { throw std::runtime_error{std::format("Each item in the registry must be a mapping, but found '{}'.", fkyaml::to_string(mapping.get_type()))}; }
 	if (!mapping.contains(KEY_NAME)) { throw std::runtime_error{std::format("Each item in the registry must contain a '{}' key.", KEY_NAME)}; }
-	auto name                       = to_pmr_string(ctx, mapping, KEY_NAME);
-	auto origin                     = find_origin(ctx, mapping);
-	auto override_find_package_name = find_string(ctx, mapping, KEY_OVERRIDE_FIND_PACKAGE_NAME);
+	auto name   = to_pmr_string(ctx, mapping, KEY_NAME);
+	auto origin = find_origin(ctx, mapping);
 	return dip::dep {
-		.name                       = std::move(name),
-		.origin                     = std::move(origin),
-		.cmake_options              = find_cmake_options(ctx, mapping),
-		.override_find_package_name = override_find_package_name.value_or(std::pmr::string{ctx->mem})
+		.name          = std::move(name),
+		.origin        = std::move(origin),
+		.cmake_options = find_cmake_options(ctx, mapping),
 	};
 }
 
@@ -308,11 +285,10 @@ auto to_yaml(context* ctx, const dip::dep& dep) -> node_t::mapping_type {
 	auto mapping = node_t::mapping_type{};
 	mapping[KEY_NAME] = dep.name;
 	map_into(&mapping, dep.origin);
-	if (!dep.cmake_options.any.empty())          { mapping[KEY_CMAKE_OPTIONS]              = join<std::pmr::string>(ctx, dep.cmake_options.any, " "); }
-	if (!dep.cmake_options.mac.empty())          { mapping[KEY_CMAKE_OPTIONS_MAC]          = join<std::pmr::string>(ctx, dep.cmake_options.mac, " "); }
-	if (!dep.cmake_options.lin.empty())          { mapping[KEY_CMAKE_OPTIONS_LIN]          = join<std::pmr::string>(ctx, dep.cmake_options.lin, " "); }
-	if (!dep.cmake_options.win.empty())          { mapping[KEY_CMAKE_OPTIONS_WIN]          = join<std::pmr::string>(ctx, dep.cmake_options.win, " "); }
-	if (!dep.override_find_package_name.empty()) { mapping[KEY_OVERRIDE_FIND_PACKAGE_NAME] = dep.override_find_package_name; }
+	if (!dep.cmake_options.any.empty()) { mapping[KEY_CMAKE_OPTIONS]     = join<std::pmr::string>(ctx, dep.cmake_options.any, " "); }
+	if (!dep.cmake_options.mac.empty()) { mapping[KEY_CMAKE_OPTIONS_MAC] = join<std::pmr::string>(ctx, dep.cmake_options.mac, " "); }
+	if (!dep.cmake_options.lin.empty()) { mapping[KEY_CMAKE_OPTIONS_LIN] = join<std::pmr::string>(ctx, dep.cmake_options.lin, " "); }
+	if (!dep.cmake_options.win.empty()) { mapping[KEY_CMAKE_OPTIONS_WIN] = join<std::pmr::string>(ctx, dep.cmake_options.win, " "); }
 	return mapping;
 }
 

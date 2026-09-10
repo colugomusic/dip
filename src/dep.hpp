@@ -16,7 +16,6 @@ struct dep {
 	std::pmr::string name;
 	dip::origin origin;
 	dip::cmake_options cmake_options;
-	std::pmr::string override_find_package_name;
 };
 
 } // dip
