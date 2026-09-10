@@ -119,8 +119,8 @@ auto find_origin_url(context* ctx, const node_t& mapping) -> std::optional<dip::
 [[nodiscard]]
 auto find_origin(context* ctx, const node_t& mapping) -> dip::origin {
 	if (const auto url                = find_origin_url(ctx, mapping))                { return *url; }
-	if (const auto git_repo           = find_origin_git_repo(ctx, mapping))           { return *git_repo; }
 	if (const auto git_tracked_branch = find_origin_git_tracked_branch(ctx, mapping)) { return *git_tracked_branch; }
+	if (const auto git_repo           = find_origin_git_repo(ctx, mapping))           { return *git_repo; }
 	throw std::runtime_error{std::format("Each item in the registry must contain either a '{}' or '{}' key.", KEY_URL, KEY_GIT)};
 }
 
@@ -214,9 +214,10 @@ auto find_cmake_options(context* ctx, const node_t& mapping) -> cmake_options {
 }
 
 [[nodiscard]]
-auto read_project_settings_yml(context* ctx, const std::filesystem::path& dip_dir, const std::filesystem::path& path) -> yml_project_settings {
+auto read_project_settings_yml(context* ctx, const std::filesystem::path& dip_dir) -> yml_project_settings {
+	const auto path = dip_dir / FILENAME_SETTINGS_YML;
 	if (std::filesystem::exists(path)) {
-		ctx->log->info(pmr_format(ctx, "Reading project settings from '{}'", path.string()));
+		ctx->log->detail(pmr_format(ctx, "Reading project settings from '{}'", path.string()));
 		if (const auto text = read_file_text(ctx, path)) {
 			const auto node = node_t::deserialize(*text);
 			return yml_project_settings {
@@ -260,7 +261,7 @@ auto read_deps_yml(context* ctx, const node_t& list) -> std::pmr::vector<dip::de
 [[nodiscard]]
 auto read_registry_yml(context* ctx, const std::filesystem::path& path) -> yml_registry {
 	if (std::filesystem::exists(path)) {
-		ctx->log->info(pmr_format(ctx, "Reading registry from '{}'", path.string()));
+		ctx->log->detail(pmr_format(ctx, "Reading registry from '{}'", path.string()));
 		if (const auto text = read_file_text(ctx, path)) {
 			const auto node = node_t::deserialize(*text);
 			return yml_registry{
@@ -303,14 +304,14 @@ auto map_into(node_t::mapping_type* mapping, const dip::origin& origin) -> void 
 }
 
 [[nodiscard]]
-auto to_yaml(const dip::dep& dep) -> node_t::mapping_type {
+auto to_yaml(context* ctx, const dip::dep& dep) -> node_t::mapping_type {
 	auto mapping = node_t::mapping_type{};
 	mapping[KEY_NAME] = dep.name;
 	map_into(&mapping, dep.origin);
-	if (!dep.cmake_options.any.empty())          { mapping[KEY_CMAKE_OPTIONS]              = dep.cmake_options.any; }
-	if (!dep.cmake_options.mac.empty())          { mapping[KEY_CMAKE_OPTIONS_MAC]          = dep.cmake_options.mac; }
-	if (!dep.cmake_options.lin.empty())          { mapping[KEY_CMAKE_OPTIONS_LIN]          = dep.cmake_options.lin; }
-	if (!dep.cmake_options.win.empty())          { mapping[KEY_CMAKE_OPTIONS_WIN]          = dep.cmake_options.win; }
+	if (!dep.cmake_options.any.empty())          { mapping[KEY_CMAKE_OPTIONS]              = join<std::pmr::string>(ctx, dep.cmake_options.any, " "); }
+	if (!dep.cmake_options.mac.empty())          { mapping[KEY_CMAKE_OPTIONS_MAC]          = join<std::pmr::string>(ctx, dep.cmake_options.mac, " "); }
+	if (!dep.cmake_options.lin.empty())          { mapping[KEY_CMAKE_OPTIONS_LIN]          = join<std::pmr::string>(ctx, dep.cmake_options.lin, " "); }
+	if (!dep.cmake_options.win.empty())          { mapping[KEY_CMAKE_OPTIONS_WIN]          = join<std::pmr::string>(ctx, dep.cmake_options.win, " "); }
 	if (!dep.override_find_package_name.empty()) { mapping[KEY_OVERRIDE_FIND_PACKAGE_NAME] = dep.override_find_package_name; }
 	return mapping;
 }
@@ -320,13 +321,13 @@ auto save_to(context* ctx, const yml_registry& registry, const std::filesystem::
 	tmp_path.replace_extension(".tmp");
 	auto root = node_t::sequence_type{};
 	for (const auto& dep : registry.deps) {
-		root.push_back(to_yaml(dep));
+		root.push_back(to_yaml(ctx, dep));
 	}
 	auto string = node_t::serialize(root);
 	write_text_to_file(tmp_path, string);
 	std::filesystem::rename(tmp_path, path);
 	std::filesystem::remove(tmp_path);
-	ctx->log->info(pmr_format(ctx, "Saved registry to '{}'", path.string()));
+	ctx->log->detail(pmr_format(ctx, "Saved registry to '{}'", path.string()));
 }
 
 } // dip

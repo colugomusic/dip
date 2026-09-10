@@ -19,13 +19,20 @@ auto to_bytes(context* ctx, std::span<const std::pmr::string> v) -> std::pmr::ve
 }
 
 [[nodiscard]]
-auto to_bytes(context* ctx, const std::filesystem::path& v) -> std::pmr::vector<std::byte> {
+auto to_bytes(context* ctx, std::span<const std::pmr::string::value_type> v) -> std::pmr::vector<std::byte> {
+	auto bytes = std::pmr::vector<std::byte>{ctx->mem};
+	std::ranges::copy(std::as_bytes(v), std::back_inserter(bytes));
+	return bytes;
+}
+
+[[nodiscard]]
+auto origin_to_bytes(context* ctx, const std::filesystem::path& v) -> std::pmr::vector<std::byte> {
 	const auto str_bytes = std::as_bytes(std::span{v.string().data(), v.string().size()});
 	return std::pmr::vector<std::byte>{str_bytes.begin(), str_bytes.end(), ctx->mem};
 }
 
 [[nodiscard]]
-auto to_bytes(context* ctx, const origin_git_repo& v) -> std::pmr::vector<std::byte> {
+auto origin_to_bytes(context* ctx, const origin_git_repo& v) -> std::pmr::vector<std::byte> {
 	auto bytes = std::pmr::vector<std::byte>{ctx->mem};
 	const auto url_bytes    = to_bytes(ctx, v.url);
 	const auto commit_bytes = to_bytes(ctx, v.commit);
@@ -35,7 +42,7 @@ auto to_bytes(context* ctx, const origin_git_repo& v) -> std::pmr::vector<std::b
 }
 
 [[nodiscard]]
-auto to_bytes(context* ctx, const origin_git_tracked_branch& v) -> std::pmr::vector<std::byte> {
+auto origin_to_bytes(context* ctx, const origin_git_tracked_branch& v) -> std::pmr::vector<std::byte> {
 	auto bytes = std::pmr::vector<std::byte>{ctx->mem};
 	const auto url_bytes    = to_bytes(ctx, v.url);
 	const auto branch_bytes = to_bytes(ctx, v.branch);
@@ -45,7 +52,7 @@ auto to_bytes(context* ctx, const origin_git_tracked_branch& v) -> std::pmr::vec
 }
 
 [[nodiscard]]
-auto to_bytes(context* ctx, const origin_url& v) -> std::pmr::vector<std::byte> {
+auto origin_to_bytes(context* ctx, const origin_url& v) -> std::pmr::vector<std::byte> {
 	auto bytes = std::pmr::vector<std::byte>{ctx->mem};
 	const auto url_bytes = to_bytes(ctx, v.url);
 	std::ranges::copy(url_bytes, std::back_inserter(bytes));
@@ -54,7 +61,7 @@ auto to_bytes(context* ctx, const origin_url& v) -> std::pmr::vector<std::byte> 
 
 [[nodiscard]]
 auto to_bytes(context* ctx, const dip::origin& origin) -> std::pmr::vector<std::byte> {
-	return std::visit([ctx](const auto& origin) { return to_bytes(ctx, to_bytes(ctx, origin)); }, origin);
+	return std::visit([ctx](const auto& origin) { return origin_to_bytes(ctx, origin); }, origin);
 }
 
 [[nodiscard]]

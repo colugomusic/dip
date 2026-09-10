@@ -57,11 +57,15 @@ auto get_cmake_options_list(context* ctx, os::platform platform, const cmake_opt
 }
 
 [[nodiscard]]
-auto get_cmake_options_string(context* ctx, os::platform platform, const cmake_options& project_options, const cmake_options& dep_options) -> std::pmr::string {
-	const auto list = get_cmake_options_list(ctx, platform, project_options, dep_options);
+auto get_cmake_options_string(context* ctx, std::span<const std::pmr::string> list) -> std::pmr::string {
 	auto str = join<std::pmr::string>(ctx, list, " ");
 	std::replace(str.begin(), str.end(), '\n', ' ');
 	return str;
+}
+
+[[nodiscard]]
+auto get_cmake_options_string(context* ctx, os::platform platform, const cmake_options& project_options, const cmake_options& dep_options) -> std::pmr::string {
+	return get_cmake_options_string(ctx, get_cmake_options_list(ctx, platform, project_options, dep_options));
 }
 
 } // dip

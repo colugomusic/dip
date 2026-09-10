@@ -24,7 +24,7 @@ auto make_find_package_cmakelists(context* ctx, std::string_view name) -> std::p
 [[nodiscard]]
 auto cmake_package_can_be_found(context* ctx, const dip::dirs& dirs, const prog_paths& progs, std::string_view name, const dip::cfg& cfg) -> bool {
 	const auto cmakelists_text      = make_find_package_cmakelists(ctx, name);
-	const auto pkg_check_dir_path   = make_pkg_check_dir_path(dirs);
+	const auto pkg_check_dir_path   = make_pkg_check_dir_path(dirs, cfg.name);
 	const auto install_prefix_path  = make_install_prefix_path(dirs, cfg.name);
 	const auto cmakelists_path      = pkg_check_dir_path / "CMakeLists.txt";
 	std::filesystem::create_directories(pkg_check_dir_path);

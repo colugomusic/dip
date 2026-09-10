@@ -1,5 +1,6 @@
 #pragma once
 
+#include "const-strings.hpp"
 #include "dep.hpp"
 #include "fs.hpp"
 #include "string-util.hpp"
@@ -10,12 +11,11 @@ struct dirs {
 	std::filesystem::path cache;
 	std::filesystem::path root;
 	std::filesystem::path project;
-	std::filesystem::path dip;
 };
 
 [[nodiscard]]
-auto make_pkg_check_dir_path(const dip::dirs& dirs) -> std::filesystem::path {
-	return dirs.cache / "pkg-check";
+auto make_pkg_check_dir_path(const dip::dirs& dirs, std::string_view cfg) -> std::filesystem::path {
+	return dirs.cache / "pkg-check" / cfg;
 }
 
 [[nodiscard]]
@@ -23,6 +23,12 @@ auto make_install_prefix_path(const dip::dirs& dirs, std::string_view cfg) -> st
 	return dirs.root / "install" / cfg;
 }
 
+[[nodiscard]]
+auto make_registry_override_path(const dip::dirs& dirs, std::string_view dep_name, std::string_view version) -> std::filesystem::path {
+	return dirs.cache / dep_name / version / FILENAME_REGISTRY_YML;
+}
+
+/*
 [[nodiscard]]
 auto make_origin_dir_name(context* ctx, const origin_git_repo& v) -> std::filesystem::path {
 	return sanitize_to_folder_name(v.url) / v.commit;
@@ -47,20 +53,21 @@ auto make_origin_dir_name(context* ctx, const std::filesystem::path& v) -> std::
 auto make_dir_name(context* ctx, const dip::origin& origin) -> std::filesystem::path {
 	return std::visit([ctx](const auto& origin) { return make_origin_dir_name(ctx, origin); }, origin);
 }
+*/
 
 [[nodiscard]]
-auto make_bld_dir_path(context* ctx, const dip::dirs& dirs, const dip::dep& dep, std::string_view cfg) -> std::filesystem::path {
-	return dirs.cache / dep.name / make_dir_name(ctx, dep.origin) / "bld" / cfg;
+auto make_bld_dir_path(context* ctx, const dip::dirs& dirs, std::string_view dep_name, std::string_view version, std::string_view cfg) -> std::filesystem::path {
+	return dirs.cache / dep_name / version / "bld" / cfg;
 }
 
 [[nodiscard]]
-auto make_dl_dir_path(context* ctx, const dip::dirs& dirs, const dip::dep& dep) -> std::filesystem::path {
-	return dirs.cache / dep.name / make_dir_name(ctx, dep.origin) / "dl";
+auto make_dl_dir_path(context* ctx, const dip::dirs& dirs, std::string_view dep_name, std::string_view version) -> std::filesystem::path {
+	return dirs.cache / dep_name / version / "dl";
 }
 
 [[nodiscard]]
-auto make_src_dir_path(context* ctx, const dip::dirs& dirs, const dip::dep& dep) -> std::filesystem::path {
-	return dirs.cache / dep.name / make_dir_name(ctx, dep.origin) / "src";
+auto make_src_dir_path(context* ctx, const dip::dirs& dirs, std::string_view dep_name, std::string_view version) -> std::filesystem::path {
+	return dirs.cache / dep_name / version / "src";
 }
 
 } // dip

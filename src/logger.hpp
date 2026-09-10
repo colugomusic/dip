@@ -6,6 +6,7 @@
 
 namespace dip {
 
+struct log_debug        { std::pmr::string v; };
 struct log_dep_task     { std::pmr::string dep; std::pmr::string task; };
 struct log_dep_cfg_task { std::pmr::string dep; std::pmr::string cfg; std::pmr::string task; };
 struct log_detail       { std::pmr::string v; };
@@ -13,9 +14,18 @@ struct log_error        { std::pmr::string v; };
 struct log_info         { std::pmr::string v; };
 struct log_warn         { std::pmr::string v; };
 
-using log_item = std::variant<log_dep_task, log_dep_cfg_task, log_detail, log_error, log_info, log_warn>;
+using log_item = std::variant<
+	log_debug,
+	log_dep_task,
+	log_dep_cfg_task,
+	log_detail,
+	log_error,
+	log_info,
+	log_warn
+>;
 
 template <
+	typename debug_fn,
 	typename dep_task_fn,
 	typename dep_cfg_task_fn,
 	typename detail_fn,
@@ -24,6 +34,7 @@ template <
 	typename warn_fn
 >
 struct logger_fns {
+	debug_fn debug;
 	dep_task_fn dep_task;
 	dep_cfg_task_fn dep_cfg_task;
 	detail_fn detail;
@@ -35,6 +46,9 @@ struct logger_fns {
 struct logger {
 	auto clear() -> void {
 		items_.clear();
+	}
+	auto push(log_debug v) -> void {
+		items_.push_back(std::move(v));
 	}
 	auto push(log_dep_task v) -> void {
 		items_.push_back(std::move(v));
@@ -54,6 +68,9 @@ struct logger {
 	auto push(log_warn v) -> void {
 		items_.push_back(std::move(v));
 	}
+	auto debug(std::pmr::string v) -> void {
+		push(log_debug{std::move(v)});
+	}
 	auto dep_task(std::pmr::string dep, std::pmr::string task) -> void {
 		push(log_dep_task{std::move(dep), std::move(task)});
 	}
@@ -72,6 +89,7 @@ struct logger {
 	auto warn(std::pmr::string v) -> void {
 		push(log_warn{std::move(v)});
 	}
+	static auto visit(log_debug v, auto fns) -> void        { fns.debug(v); }
 	static auto visit(log_dep_task v, auto fns) -> void     { fns.dep_task(v); }
 	static auto visit(log_dep_cfg_task v, auto fns) -> void { fns.dep_cfg_task(v); }
 	static auto visit(log_detail v, auto fns) -> void       { fns.detail(v); }

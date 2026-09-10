@@ -93,4 +93,10 @@ auto sanitize_to_folder_name(std::pmr::string text) -> std::filesystem::path {
 	return std::filesystem::path{text};
 }
 
+auto remove_if_exists(const std::filesystem::path& path) -> void {
+	if (std::filesystem::exists(path)) {
+		std::filesystem::remove_all(path);
+	}
+}
+
 } // dip
