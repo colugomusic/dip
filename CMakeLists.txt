@@ -40,7 +40,6 @@ target_sources(tiny-process-library INTERFACE
 )
 target_sources(dip PRIVATE
 	src/args.hpp
-	src/cfg.hpp
 	src/cmake.hpp
 	src/cmake-options.hpp
 	src/const-strings.hpp

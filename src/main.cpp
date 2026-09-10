@@ -18,7 +18,7 @@ namespace dip {
 auto operator""_MB(uint64_t v) -> uint64_t { return 1024 * 1024 * v; }
 
 struct work_to_do {
-	std::pmr::vector<std::pmr::string> cfgs;
+	std::pmr::vector<std::pmr::string> cmake_configs;
 	std::pmr::vector<std::pmr::string> process;
 	std::pmr::vector<std::pmr::string> track;
 	std::pmr::vector<std::pmr::string> reacquire;
@@ -144,14 +144,9 @@ auto expand_track(context* ctx, const yml_registry& registry, std::pmr::vector<s
 }
 
 [[nodiscard]]
-auto get_cfgs_to_process(context* ctx, const yml_project_settings& settings, const dip::work_requested& work_requested) -> std::pmr::vector<std::pmr::string> {
-	if (!work_requested.cfg.empty()) {
-		return work_requested.cfg;
-	}
-	const auto fn_get_cfg_name = [](const dip::cfg& cfg) { return cfg.name; };
-	auto list = std::pmr::vector<std::pmr::string>{ctx->mem};
-	std::ranges::transform(settings.cfgs, std::back_inserter(list), fn_get_cfg_name);
-	return list;
+auto get_cmake_configs_to_process(context*, const yml_project_settings& settings, const dip::work_requested& work_requested) -> std::pmr::vector<std::pmr::string> {
+	if (!work_requested.cfg.empty()) { return work_requested.cfg; }
+	else                             { return settings.cmake_configs; }
 }
 
 [[nodiscard]]
@@ -159,10 +154,10 @@ auto get_work_to_do(context* ctx, const yml_project_settings& settings, const ym
 	auto track     = expand_track(ctx, registry, work_requested.track);
 	auto reacquire = work_requested.reacquire;
 	return work_to_do{
-		.cfgs            = get_cfgs_to_process(ctx, settings, work_requested),
-		.process         = sort_deps_into_processing_order(get_dep_names(ctx, registry), registry),
-		.track           = sort_and_remove_duplicates(ctx, track),
-		.reacquire       = sort_and_remove_duplicates(ctx, reacquire)
+		.cmake_configs = get_cmake_configs_to_process(ctx, settings, work_requested),
+		.process       = sort_deps_into_processing_order(get_dep_names(ctx, registry), registry),
+		.track         = sort_and_remove_duplicates(ctx, track),
+		.reacquire     = sort_and_remove_duplicates(ctx, reacquire)
 	};
 }
 
@@ -335,20 +330,9 @@ auto to_track(context* ctx, const dip::state& state, const dip::dep& dep) -> boo
 }
 
 [[nodiscard]]
-auto to_install(context* ctx, const dip::state& state, const dip::dep& dep, const dip::cfg& cfg) -> bool {
+auto to_install(context* ctx, const dip::state& state, std::string_view dep_name, std::string_view cmake_config) -> bool {
 	return
-		!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, dep.name, cfg);
-}
-
-[[nodiscard]]
-auto to_install(context* ctx, const dip::state& state, const dip::dep& dep) -> bool {
-	for (const auto cfg_name : state.work_to_do.cfgs) {
-		const auto& cfg = get_cfg(state.project_settings, cfg_name);
-		if (to_install(ctx, state, dep, cfg)) {
-			return true;
-		}
-	}
-	return false;
+		!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, dep_name, cmake_config);
 }
 
 [[nodiscard]]
@@ -449,39 +433,39 @@ auto acquire(context* ctx, dip::dep* dep, const dip::state& state, std::string_v
 	std::visit([ctx, dep, &state, version](const auto& origin) { acquire_src_from_origin(ctx, dep, state, version, origin); }, dep->origin);
 }
 
-auto configure(context* ctx, const dip::state& state, const dip::dep& dep, const std::filesystem::path& src_dir_path, const std::filesystem::path& bld_dir_path, std::span<const std::pmr::string> cmake_options_list, const dip::cfg& cfg) -> void {
-	ctx->log->dep_cfg_task(decorate(ctx, state, dep.name), to_pmr_string(ctx, cfg.name), pmr_format(ctx, "Configure"));
+auto configure(context* ctx, const dip::state& state, const dip::dep& dep, const std::filesystem::path& src_dir_path, const std::filesystem::path& bld_dir_path, std::span<const std::pmr::string> cmake_options_list, std::string_view cmake_config) -> void {
+	ctx->log->dep_cfg_task(decorate(ctx, state, dep.name), to_pmr_string(ctx, cmake_config), pmr_format(ctx, "Configure"));
 	print_and_clear_log(ctx);
-	const auto install_prefix_path = make_install_prefix_path(state.dirs, cfg.name);
+	const auto install_prefix_path = make_install_prefix_path(state.dirs, cmake_config);
 	const auto cmakelists          = find_file_in_dir(ctx, src_dir_path, "CMakeLists.txt");
 	if (!cmakelists) {
 		throw std::runtime_error(std::format("No CMakeLists.txt found in source directory '{}'", src_dir_path.string()));
 	}
 	const auto cmake_options_string = get_cmake_options_string(ctx, cmake_options_list);
-	cmake_configure(ctx, state.prog_paths, install_prefix_path, cmakelists->parent_path(), bld_dir_path, cfg.cmake_config, cmake_options_string);
+	cmake_configure(ctx, state.prog_paths, install_prefix_path, cmakelists->parent_path(), bld_dir_path, cmake_config, cmake_options_string);
 }
 
-auto build(context* ctx, const dip::state& state, const dip::dep& dep, const std::filesystem::path& bld_dir_path, const dip::cfg& cfg) -> void {
-	ctx->log->dep_cfg_task(decorate(ctx, state, dep.name), to_pmr_string(ctx, cfg.name), pmr_format(ctx, "Build"));
+auto build(context* ctx, const dip::state& state, const dip::dep& dep, const std::filesystem::path& bld_dir_path, std::string_view cmake_config) -> void {
+	ctx->log->dep_cfg_task(decorate(ctx, state, dep.name), to_pmr_string(ctx, cmake_config), pmr_format(ctx, "Build"));
 	print_and_clear_log(ctx);
-	cmake_build(ctx, state.prog_paths, bld_dir_path, cfg.cmake_config);
+	cmake_build(ctx, state.prog_paths, bld_dir_path, cmake_config);
 }
 
-auto install(context* ctx, const dip::state& state, const dip::dep& dep, const std::filesystem::path& bld_dir_path, const dip::cfg& cfg) -> void {
-	ctx->log->dep_cfg_task(decorate(ctx, state, dep.name), to_pmr_string(ctx, cfg.name), pmr_format(ctx, "Install"));
+auto install(context* ctx, const dip::state& state, const dip::dep& dep, const std::filesystem::path& bld_dir_path, std::string_view cmake_config) -> void {
+	ctx->log->dep_cfg_task(decorate(ctx, state, dep.name), to_pmr_string(ctx, cmake_config), pmr_format(ctx, "Install"));
 	print_and_clear_log(ctx);
-	cmake_install(ctx, state.prog_paths, bld_dir_path, cfg.cmake_config);
-	if (!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, dep.name, cfg)) {
+	cmake_install(ctx, state.prog_paths, bld_dir_path, cmake_config);
+	if (!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, dep.name, cmake_config)) {
 		throw std::runtime_error{std::format("CMake could still not find package '{}' after installing it.", dep.name)};
 	}
 }
 
-auto configure_build_install(context* ctx, const dip::state& state, const dip::dep& dep, std::string_view version, std::span<const std::pmr::string> cmake_options_list, const dip::cfg& cfg) -> void {
+auto configure_build_install(context* ctx, const dip::state& state, const dip::dep& dep, std::string_view version, std::span<const std::pmr::string> cmake_options_list, std::string_view cmake_config) -> void {
 	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, version);
-	const auto bld_dir_path = make_bld_dir_path(ctx, state.dirs, version, cfg.name);
-	configure(ctx, state, dep, src_dir_path, bld_dir_path, cmake_options_list, cfg);
-	build(ctx, state, dep, bld_dir_path, cfg);
-	install(ctx, state, dep, bld_dir_path, cfg);
+	const auto bld_dir_path = make_bld_dir_path(ctx, state.dirs, version, cmake_config);
+	configure(ctx, state, dep, src_dir_path, bld_dir_path, cmake_options_list, cmake_config);
+	build(ctx, state, dep, bld_dir_path, cmake_config);
+	install(ctx, state, dep, bld_dir_path, cmake_config);
 }
 
 auto do_work(context* ctx, dip::state* state) -> void;
@@ -529,10 +513,9 @@ auto do_process(context* ctx, dip::state* state, std::string_view name) -> void 
 		ctx->log->dep_task(decorate(ctx, *state, dep->name), "Ready");
 		return;
 	}
-	for (const auto cfg_name : state->work_to_do.cfgs) {
-		const auto& cfg = get_cfg(state->project_settings, cfg_name);
-		if (to_install(ctx, *state, *dep, cfg)) {
-			configure_build_install(ctx, *state, *dep, version, cmake_options, cfg);
+	for (const auto cmake_config : state->work_to_do.cmake_configs) {
+		if (to_install(ctx, *state, dep->name, cmake_config)) {
+			configure_build_install(ctx, *state, *dep, version, cmake_options, cmake_config);
 			state->work_done.at_least_one_dep_was_installed = true;
 		}
 	}
@@ -540,14 +523,13 @@ auto do_process(context* ctx, dip::state* state, std::string_view name) -> void 
 }
 
 auto install_self(context* ctx, const dip::state& state, const dep& self) -> void {
-	for (const auto cfg_name : state.work_to_do.cfgs) {
-		const auto& cfg = get_cfg(state.project_settings, cfg_name);
+	for (const auto cmake_config : state.work_to_do.cmake_configs) {
 		const auto cmake_options  = get_cmake_options_list(ctx, os::get_platform(), state.project_settings.cmake_options, self.cmake_options);
 		const auto version        = make_version_string(ctx, self.origin, cmake_options);
-		const auto package_found  = cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, self.name, cfg);
+		const auto package_found  = cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, self.name, cmake_config);
 		const auto deps_installed = state.work_done.at_least_one_dep_was_installed;
 		if (deps_installed || !package_found) {
-			configure_build_install(ctx, state, self, version, cmake_options, cfg);
+			configure_build_install(ctx, state, self, version, cmake_options, cmake_config);
 		}
 	}
 }

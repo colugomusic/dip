@@ -1,6 +1,5 @@
 #pragma once
 
-#include "cfg.hpp"
 #include "cmake-options.hpp"
 #include "const-strings.hpp"
 #include "context.hpp"
@@ -17,29 +16,12 @@ using node_t = fkyaml::basic_node<std::vector, std::unordered_map>;
 struct yml_project_settings {
 	std::pmr::string name;
 	dip::cmake_options cmake_options;
-	std::pmr::vector<dip::cfg> cfgs;
+	std::pmr::vector<std::pmr::string> cmake_configs;
 };
 
 struct yml_registry {
 	std::pmr::vector<dip::dep> deps;
 };
-
-[[nodiscard]]
-auto make_default_cfg_list(context* ctx) -> std::pmr::vector<dip::cfg> {
-	return std::pmr::vector<dip::cfg>{
-		dip::cfg{.name = {"dbg", ctx->mem}, .cmake_config = {"Debug", ctx->mem}},
-		dip::cfg{.name = {"rel", ctx->mem}, .cmake_config = {"Release", ctx->mem}}
-	};
-}
-
-[[nodiscard]]
-auto get_cfg(const yml_project_settings& settings, std::string_view cfg_name) -> const dip::cfg& {
-	const auto fn_cfg_name_is = [cfg_name](const dip::cfg& cfg) { return cfg.name == cfg_name; };
-	if (const auto pos = std::ranges::find_if(settings.cfgs, fn_cfg_name_is); pos != std::cend(settings.cfgs)) {
-		return *pos;
-	}
-	throw std::runtime_error{std::format("The '{}' cfg was not found in the project settings.", cfg_name)};
-}
 
 [[nodiscard]]
 auto read_string(context* ctx, const node_t& node, std::string_view key) -> std::optional<std::pmr::string> {
@@ -144,33 +126,24 @@ auto find_bool(context*, const node_t& mapping, std::string_view key) -> std::op
 }
 
 [[nodiscard]]
-auto get_cfg_list_from_yaml_or_use_default(context* ctx, const node_t& root, std::pmr::vector<dip::cfg> default_cfgs) -> std::pmr::vector<dip::cfg> {
-	auto list = std::pmr::vector<dip::cfg>{ctx->mem};
-	if (root.contains(KEY_CFGS)) {
-		const auto cfgs_node = root.at(KEY_CFGS);
-		if (!cfgs_node.is_mapping()) {
-			throw std::runtime_error{std::format("The '{}' key must be a mapping, but found '{}'.", KEY_CFGS, fkyaml::to_string(cfgs_node.get_type()))};
+auto find_cmake_config_list(context* ctx, const node_t& root) -> std::pmr::vector<std::pmr::string> {
+	auto list = std::pmr::vector<std::pmr::string>{ctx->mem};
+	if (root.contains(KEY_CMAKE_CONFIGS)) {
+		const auto cfgs_node = root.at(KEY_CMAKE_CONFIGS);
+		if (!cfgs_node.is_sequence()) {
+			throw std::runtime_error{std::format("The '{}' key must be a sequence, but found '{}'.", KEY_CMAKE_CONFIGS, fkyaml::to_string(cfgs_node.get_type()))};
 		}
-		for (auto it = cfgs_node.begin(); it != cfgs_node.end(); it++) {
-			const auto cfg_node = *it;
-			if (!cfg_node.is_mapping()) {
-				throw std::runtime_error{std::format("Each item in the '{}' mapping must be a mapping, but found '{}'.", KEY_CFGS, fkyaml::to_string(cfg_node.get_type()))};
+		for (const auto& cfg_node : cfgs_node) {
+			if (!cfg_node.is_string()) {
+				throw std::runtime_error{std::format("Each item in the '{}' sequence must be a string, but found '{}'.", KEY_CMAKE_CONFIGS, fkyaml::to_string(cfg_node.get_type()))};
 			}
-			if (!cfg_node.contains(KEY_CMAKE_CONFIG)) {
-				throw std::runtime_error{std::format("Each item in the '{}' mapping must contain a '{}' key.", KEY_CFGS, KEY_CMAKE_CONFIG)};
-			}
-			const auto name = it.key().get_value<std::string>();
-			const auto cmake_config = to_pmr_string(ctx, cfg_node, KEY_CMAKE_CONFIG);
-			ctx->log->detail(pmr_format(ctx, "Found cfg '{}' with cmake config '{}'", name, cmake_config));
-			list.push_back(dip::cfg{
-				.name         = std::pmr::string{name, ctx->mem},
-				.cmake_config = cmake_config
-			});
+			const auto cfg_str = cfg_node.get_value<std::string>();
+			list.push_back(std::pmr::string{cfg_str.data(), cfg_str.size(), ctx->mem});
 		}
 		return list;
 	}
-	ctx->log->info(pmr_format(ctx, "No '{}' key was found in project settings, so using default cfg list: dbg,rel", KEY_CFGS));
-	return default_cfgs;
+	ctx->log->info(pmr_format(ctx, "No '{}' key was found in project settings, so you must specify the cmake configs on the command line, e.g. `--cfg Debug,RelWithDebInfo`", KEY_CMAKE_CONFIGS));
+	return list;
 }
 
 [[nodiscard]]
@@ -203,7 +176,7 @@ auto read_project_settings_yml(context* ctx, const std::filesystem::path& dip_di
 			return yml_project_settings {
 				.name          = find_string(ctx, node, KEY_NAME).value_or({}),
 				.cmake_options = find_cmake_options(ctx, node),
-				.cfgs          = get_cfg_list_from_yaml_or_use_default(ctx, node, make_default_cfg_list(ctx))
+				.cmake_configs = find_cmake_config_list(ctx, node)
 			};
 		}
 		throw std::runtime_error{std::format("Failed to read project settings from '{}'", path.string())};
