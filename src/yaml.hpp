@@ -24,6 +24,27 @@ struct yml_registry {
 };
 
 [[nodiscard]]
+auto fn_dep_name_is(std::string_view name) {
+	return [name](const dip::dep& dep) { return dep.name == name; };
+}
+
+[[nodiscard]]
+auto get_dep(yml_registry* registry, std::string_view name) -> dip::dep* {
+	if (auto pos = std::ranges::find_if(registry->deps, fn_dep_name_is(name)); pos != std::cend(registry->deps)) {
+		return &*pos;
+	}
+	throw std::runtime_error(std::format("Dependency '{}' not found in registry.", name));
+}
+
+[[nodiscard]]
+auto get_position_in_registry(const yml_registry& registry, std::string_view dep_name) -> size_t {
+	if (const auto pos = std::ranges::find_if(registry.deps, fn_dep_name_is(dep_name)); pos != registry.deps.end()) {
+		return std::distance(registry.deps.begin(), pos);
+	}
+	throw std::runtime_error(std::format("Dependency '{}' not found in registry.", dep_name));
+}
+
+[[nodiscard]]
 auto read_string(context* ctx, const node_t& node, std::string_view key) -> std::optional<std::pmr::string> {
 	if (node.contains(key)) {
 		const auto value_node = node.at(key);
