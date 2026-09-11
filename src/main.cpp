@@ -28,14 +28,6 @@ struct work_requested {
 	std::pmr::vector<std::pmr::string> reinstall;
 };
 
-// Collector pass:
-// 1. Update tracking.
-// 2. Acquire source code.
-// 3. Find the least-depth registries for any duplicates.
-// 4. Figure out in what order dependencies should be installed.
-
-// Installer pass: Install collected dependencies.
-
 struct collected_dep {
 	dip::dep dep;
 	dip::ancestry ancestry;
@@ -53,16 +45,20 @@ struct collector_work_to_do {
 };
 
 struct installer_work_to_do {
-	collected_deps deps;
 	std::pmr::vector<std::pmr::string> cmake_configs;
 	std::pmr::vector<std::pmr::string> reinstall;
+};
+
+struct collector_result {
+	std::pmr::vector<std::pmr::string> just_acquired_deps;
+	dip::collected_deps collected_deps;
 };
 
 struct collector {
 	dip::ancestry ancestry;
 	yml_registry registry;
 	collector_work_to_do work_to_do;
-	dip::collected_deps* collected_deps = nullptr;
+	collector_result* result = nullptr;
 };
 
 struct installer {
@@ -264,30 +260,29 @@ auto get_collector_work_to_do(context* ctx, const yml_registry& registry, const 
 }
 
 [[nodiscard]]
-auto get_installer_work_to_do(context* ctx, const yml_project_settings& settings, const dip::work_requested& work_requested, dip::collected_deps collected_deps) -> installer_work_to_do {
+auto get_installer_work_to_do(context* ctx, const yml_project_settings& settings, const dip::work_requested& work_requested) -> installer_work_to_do {
 	auto reinstall = work_requested.reinstall;
 	return installer_work_to_do{
-		.deps          = std::move(collected_deps),
 		.cmake_configs = get_cmake_configs_to_process(ctx, settings, work_requested),
 		.reinstall     = sort_and_remove_duplicates(ctx, reinstall),
 	};
 }
 
 [[nodiscard]]
-auto init_collector(context* ctx, dip::ancestry ancestry, yml_registry registry, dip::work_requested work_requested, dip::collected_deps* collected_deps) -> collector {
+auto init_collector(context* ctx, dip::ancestry ancestry, yml_registry registry, dip::work_requested work_requested, dip::collector_result* result) -> collector {
 	auto work_to_do = get_collector_work_to_do(ctx, registry, work_requested);
 	return dip::collector{
-		.ancestry       = std::move(ancestry),
-		.registry       = std::move(registry),
-		.work_to_do     = std::move(work_to_do),
-		.collected_deps = collected_deps
+		.ancestry   = std::move(ancestry),
+		.registry   = std::move(registry),
+		.work_to_do = std::move(work_to_do),
+		.result     = result
 	};
 }
 
 [[nodiscard]]
-auto init_installer(context* ctx, const yml_project_settings& settings, const dip::work_requested& work_requested, dip::collected_deps collected_deps) -> installer {
+auto init_installer(context* ctx, const yml_project_settings& settings, const dip::work_requested& work_requested) -> installer {
 	return installer{
-		.work_to_do = get_installer_work_to_do(ctx, settings, work_requested, std::move(collected_deps)),
+		.work_to_do = get_installer_work_to_do(ctx, settings, work_requested)
 	};
 }
 
@@ -303,10 +298,10 @@ auto init_state(context* ctx, const dip::args& args, const requirements& reqs, c
 }
 
 [[nodiscard]]
-auto init_collector_for_dependency_subprocessing(context* ctx, dip::ancestry parent_ancestry, dip::work_requested work_requested, std::string_view dep_name, const std::filesystem::path& registry_path, dip::collected_deps* collected_deps) -> dip::collector {
+auto init_collector_for_dependency_subprocessing(context* ctx, dip::ancestry parent_ancestry, dip::work_requested work_requested, std::string_view dep_name, const std::filesystem::path& registry_path, collector_result* result) -> dip::collector {
 	auto ancestry = make_ancestry(ctx, parent_ancestry, dep_name);
 	auto registry = read_registry_yml(ctx, registry_path);
-	return init_collector(ctx, std::move(ancestry), std::move(registry), std::move(work_requested), collected_deps);
+	return init_collector(ctx, std::move(ancestry), std::move(registry), std::move(work_requested), result);
 }
 
 [[nodiscard]]
@@ -370,6 +365,11 @@ auto were_any_subdependencies_of_this_installed(const dip::installer* installer,
 }
 
 [[nodiscard]]
+auto was_this_just_acquired(const dip::collector_result& result, std::string_view name) {
+	return std::ranges::find(result.just_acquired_deps, name) != result.just_acquired_deps.end();
+}
+
+[[nodiscard]]
 auto to_track(context* ctx, const dip::collector& collector, const dip::dep& dep) -> bool {
 	const auto empty_track_commit = has_empty_track_commit(dep);
 	const auto user_requested     = user_requested_track(ctx, collector.work_to_do, dep.name);
@@ -385,11 +385,12 @@ auto to_acquire(context* ctx, const dip::state& state, const dip::collector& col
 }
 
 [[nodiscard]]
-auto to_install(context* ctx, const dip::state& state, const dip::installer& installer, std::string_view dep_name, std::string_view cmake_config) -> bool {
+auto to_install(context* ctx, const dip::state& state, const dip::collector_result& collector_result, const dip::installer& installer, std::string_view dep_name, std::string_view cmake_config) -> bool {
 	return
 		!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, dep_name, cmake_config) ||
 		user_requested_reinstall(installer.work_to_do, dep_name) ||
-		were_any_subdependencies_of_this_installed(&installer, dep_name);
+		were_any_subdependencies_of_this_installed(&installer, dep_name) ||
+		was_this_just_acquired(collector_result, dep_name);
 }
 
 [[nodiscard]]
@@ -543,7 +544,7 @@ auto run_dip_on(context* ctx, const dip::state& state, const dip::collector& col
 	if (const auto dip_dir = find_dip_dir(ctx, src_dir_path)) {
 		ctx->log->detail(pmr_format(ctx, "Found '{}' directory at '{}'", DIR_PROJECT_DIP, dip_dir->string()));
 		const auto registry_path = get_dep_registry_to_use(ctx, *dip_dir, registry_override);
-		auto dep_collector       = init_collector_for_dependency_subprocessing(ctx, collector.ancestry, state.work_requested, dep.name, registry_path, collector.collected_deps);
+		auto dep_collector       = init_collector_for_dependency_subprocessing(ctx, collector.ancestry, state.work_requested, dep.name, registry_path, collector.result);
 		run_collector(ctx, state, &dep_collector, depth + 1);
 		// Collect self
 		auto self_cdep = collected_dep {
@@ -553,7 +554,7 @@ auto run_dip_on(context* ctx, const dip::state& state, const dip::collector& col
 			.cmake_options = cmake_options,
 			.depth         = depth
 		};
-		collector.collected_deps->push_back(std::move(self_cdep));
+		collector.result->collected_deps.push_back(std::move(self_cdep));
 		save_to(ctx, dep_collector.registry, registry_override);
 		return true;
 	}
@@ -563,7 +564,7 @@ auto run_dip_on(context* ctx, const dip::state& state, const dip::collector& col
 [[nodiscard]]
 auto find_collected_dep(const dip::collector& collector, std::string_view name) -> collected_deps::iterator {
 	const auto fn_name_is = [name](const dip::collected_dep& cdep) { return cdep.dep.name == name; };
-	return std::ranges::find_if(*collector.collected_deps, fn_name_is);
+	return std::ranges::find_if(collector.result->collected_deps, fn_name_is);
 }
 
 [[nodiscard]]
@@ -586,14 +587,14 @@ auto move_before(dip::collected_deps* list, std::string_view move_this, std::str
 
 auto run_collector(context* ctx, const dip::state& state, dip::collector* collector, std::string_view name, int depth) -> void {
 	auto existing_cdep = find_collected_dep(*collector, name);
-	if (existing_cdep != collector->collected_deps->end()) {
+	if (existing_cdep != collector->result->collected_deps.end()) {
 		if (depth >= existing_cdep->depth) {
 			// If we already collected a dep with this name and its depth
 			// is less than our current depth, keep the existing dep but
 			// just move it so that it's processed before the parent of
 			// this one.
 			if (const auto parent_name = get_parent(ctx, collector->ancestry); !parent_name.empty()) {
-				move_before(collector->collected_deps, name, parent_name);
+				move_before(&collector->result->collected_deps, name, parent_name);
 			}
 			return;
 		}
@@ -608,6 +609,7 @@ auto run_collector(context* ctx, const dip::state& state, dip::collector* collec
 	ctx->log->detail(pmr_format(ctx, "version: '{}'", version));
 	if (to_acquire(ctx, state, *collector, dep->name, version)) {
 		acquire(ctx, dep, state, *collector, version);
+		collector->result->just_acquired_deps.push_back(to_pmr_string(ctx, name));
 		remove_if_exists(registry_override);
 	}
 	if (run_dip_on(ctx, state, *collector, *dep, version, cmake_options, registry_override, depth)) {
@@ -615,26 +617,26 @@ auto run_collector(context* ctx, const dip::state& state, dip::collector* collec
 		// own dependencies.
 		return;
 	}
-	if (existing_cdep != collector->collected_deps->end()) {
+	if (existing_cdep != collector->result->collected_deps.end()) {
 		existing_cdep->ancestry      = collector->ancestry;
 		existing_cdep->version       = version;
 		existing_cdep->cmake_options = cmake_options;
 		existing_cdep->depth         = depth;
 		return;
 	}
-	auto cdep = collected_dep{
+	auto cdep = collected_dep {
 		.dep           = *dep,
 		.ancestry      = collector->ancestry,
 		.version       = version,
 		.cmake_options = cmake_options,
 		.depth         = depth
 	};
-	collector->collected_deps->push_back(std::move(cdep));
+	collector->result->collected_deps.push_back(std::move(cdep));
 }
 
-auto install(context* ctx, const dip::state& state, dip::installer* installer, const collected_dep& cdep) -> void {
+auto install(context* ctx, const dip::state& state, const dip::collector_result& collector_result, dip::installer* installer, const collected_dep& cdep) -> void {
 	for (const auto cmake_config : installer->work_to_do.cmake_configs) {
-		if (to_install(ctx, state, *installer, cdep.dep.name, cmake_config)) {
+		if (to_install(ctx, state, collector_result, *installer, cdep.dep.name, cmake_config)) {
 			configure_build_install(ctx, state, cdep, cmake_config);
 			if (const auto parent = get_parent(ctx, cdep.ancestry); !parent.empty()) {
 				remember_that_a_subdependency_of_this_was_installed(ctx, installer, parent);
@@ -651,10 +653,10 @@ auto run_collector(context* ctx, const dip::state& state, dip::collector* collec
 	}
 }
 
-auto run_installer(context* ctx, const dip::state& state, dip::installer* installer) -> void {
-	for (const auto& name : installer->work_to_do.deps) {
+auto run_installer(context* ctx, const dip::state& state, const dip::collector_result& collector_result, dip::installer* installer) -> void {
+	for (const auto& cdep : collector_result.collected_deps) {
 		print_and_clear_log(ctx);
-		install(ctx, state, installer, name);
+		install(ctx, state, collector_result, installer, cdep);
 	}
 }
 
@@ -663,6 +665,14 @@ auto print_cmake_prefix_help(context* ctx, const dip::dirs& dirs, std::span<cons
 	for (const auto& cmake_config : cmake_configs) {
 		ctx->log->info(pmr_format(ctx, "  For a {} build:\n    -DCMAKE_PREFIX_PATH=\"{}\"\n", cmake_config, make_install_prefix_path(dirs, cmake_config).string()));
 	}
+}
+
+[[nodiscard]]
+auto init_collector_result(context* ctx) -> dip::collector_result {
+	return {
+		.just_acquired_deps = std::pmr::vector<std::pmr::string>{ctx->mem},
+		.collected_deps     = dip::collected_deps{ctx->mem}
+	};
 }
 
 [[nodiscard]]
@@ -675,12 +685,12 @@ auto happy_path(context* ctx, int argc, const char* argv[]) -> int {
 			const auto no_ancestry      = dip::ancestry{ctx->mem};
 			const auto initial_registry = read_registry_yml(ctx, *dip_dir / FILENAME_REGISTRY_YML);
 			auto state = init_state(ctx, args, *reqs, *dip_dir);
-			auto collected_deps = dip::collected_deps{ctx->mem};
-			auto collector = init_collector(ctx, no_ancestry, initial_registry, state.work_requested, &collected_deps);
+			auto collector_result = init_collector_result(ctx);
+			auto collector = init_collector(ctx, no_ancestry, initial_registry, state.work_requested, &collector_result);
 			run_collector(ctx, state, &collector, 0);
 			save_to(ctx, collector.registry, *dip_dir / FILENAME_REGISTRY_YML);
-			auto installer = init_installer(ctx, state.project_settings, state.work_requested, std::move(collected_deps));
-			run_installer(ctx, state, &installer);
+			auto installer = init_installer(ctx, state.project_settings, state.work_requested);
+			run_installer(ctx, state, collector_result, &installer);
 			print_cmake_prefix_help(ctx, state.dirs, installer.work_to_do.cmake_configs);
 			return exit_success(ctx);
 		}
