@@ -33,6 +33,7 @@ struct collected_dep {
 	dip::ancestry ancestry;
 	std::pmr::string version;
 	std::pmr::vector<std::pmr::string> cmake_options;
+	// How deep into the dependency tree is the registry entry?
 	int depth = 0;
 };
 
@@ -63,6 +64,9 @@ struct collector {
 
 struct installer {
 	installer_work_to_do work_to_do;
+	// Dependencies in this list will be re-installed
+	// because at least one of their sub-dependencies
+	// was installed.
 	std::pmr::vector<std::pmr::string> at_least_one_dep_was_installed_for_this_parent;
 };
 
