@@ -124,6 +124,9 @@ auto find_origin(context* ctx, const node_t& mapping) -> dip::origin {
 	if (const auto url                = find_origin_url(ctx, mapping))                { return *url; }
 	if (const auto git_tracked_branch = find_origin_git_tracked_branch(ctx, mapping)) { return *git_tracked_branch; }
 	if (const auto git_repo           = find_origin_git_repo(ctx, mapping))           { return *git_repo; }
+	if (mapping.contains(KEY_GIT)) {
+		throw std::runtime_error{std::format("The '{}' key must be accompanied by either a '{}' or '{}' key.", KEY_GIT, KEY_COMMIT, KEY_TRACK)};
+	}
 	throw std::runtime_error{std::format("Each item in the registry must contain either a '{}' or '{}' key.", KEY_URL, KEY_GIT)};
 }
 
@@ -233,15 +236,19 @@ auto read_project_settings_yml(context* ctx, const std::filesystem::path& dip_di
 auto read_dep_yml(context* ctx, const node_t& mapping) -> dip::dep {
 	if (!mapping.is_mapping())       { throw std::runtime_error{std::format("Each item in the registry must be a mapping, but found '{}'.", fkyaml::to_string(mapping.get_type()))}; }
 	if (!mapping.contains(KEY_NAME)) { throw std::runtime_error{std::format("Each item in the registry must contain a '{}' key.", KEY_NAME)}; }
-	auto name          = to_pmr_string(ctx, mapping, KEY_NAME);
-	auto origin        = find_origin(ctx, mapping);
-	auto package_names = get_package_names(ctx, mapping);
-	return dip::dep {
-		.name          = std::move(name),
-		.package_names = std::move(package_names),
-		.origin        = std::move(origin),
-		.cmake_options = find_cmake_options(ctx, mapping),
-	};
+	auto name = to_pmr_string(ctx, mapping, KEY_NAME);
+	try {
+		auto origin        = find_origin(ctx, mapping);
+		auto package_names = get_package_names(ctx, mapping);
+		return dip::dep {
+			.name          = std::move(name),
+			.package_names = std::move(package_names),
+			.origin        = std::move(origin),
+			.cmake_options = find_cmake_options(ctx, mapping),
+		};
+	}
+	catch (const std::exception& err) { throw std::runtime_error{std::format("Error reading dependency '{}' from registry: {}", name, err.what())}; }
+	catch (...)                       { throw std::runtime_error{std::format("Unknown error reading dependency '{}' from registry.", name)}; }
 }
 
 [[nodiscard]]

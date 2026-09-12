@@ -463,7 +463,7 @@ auto md5_check_or_update(context* ctx, dip::dep* dep, const std::filesystem::pat
 
 auto acquire_src_from_origin(context* ctx, dip::dep* dep, const dip::state& state, const dip::collector& collector, std::string_view version, const std::filesystem::path& origin) -> void {
 	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, version);
-	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep->name), pmr_format(ctx, "Copying source code from '{}' to '{}'", origin.string(), src_dir_path.string()));
+	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep->name), pmr_format(ctx, "Copying source code from '{}'", origin.string()));
 	print_and_clear_log(ctx);
 	const auto copy_options =
 		std::filesystem::copy_options::recursive |
@@ -598,22 +598,28 @@ auto move_before(dip::collected_deps* list, std::string_view move_this, std::str
 	const auto fn_is_before  = [before_this](const dip::collected_dep& cdep) { return cdep.dep.name == before_this; };
 	if (const auto pos_to_move = std::ranges::find_if(*list, fn_is_to_move); pos_to_move != list->end()) {
 		if (const auto pos_before = std::ranges::find_if(*list, fn_is_before); pos_before != list->end()) {
-			const auto move_cdep = *pos_to_move;
-			list->erase(pos_to_move);
-			list->insert(pos_before, std::move(move_cdep));
+			if (pos_before < pos_to_move) {
+				const auto move_cdep = *pos_to_move;
+				list->erase(pos_to_move);
+				list->insert(pos_before, std::move(move_cdep));
+			}
 		}
 	}
 }
 
 auto run_collector(context* ctx, const dip::state& state, dip::collector* collector, std::string_view name, int depth) -> void {
+	ctx->log->detail(pmr_format(ctx, "Collecting dependency '{}'", name));
 	auto existing_cdep = find_collected_dep(*collector, name);
 	if (existing_cdep != collector->result->collected_deps.end()) {
+		ctx->log->detail(pmr_format(ctx, "We already collected a dep for '{}' at depth {}", name, existing_cdep->depth));
 		if (depth >= existing_cdep->depth) {
+			ctx->log->detail(pmr_format(ctx, "Current depth {} is greater than or equal to existing depth {}", depth, existing_cdep->depth));
 			// If we already collected a dep with this name and its depth
 			// is less than our current depth, keep the existing dep but
 			// just move it so that it's processed before the parent of
 			// this one.
 			if (const auto parent_name = get_parent(ctx, collector->ancestry); !parent_name.empty()) {
+				ctx->log->detail(pmr_format(ctx, "Moving '{}' before its parent '{}'", name, parent_name));
 				move_before(&collector->result->collected_deps, name, parent_name);
 			}
 			return;
@@ -638,12 +644,14 @@ auto run_collector(context* ctx, const dip::state& state, dip::collector* collec
 		return;
 	}
 	if (existing_cdep != collector->result->collected_deps.end()) {
+		ctx->log->detail(pmr_format(ctx, "Updating existing collected dep for '{}'", name));
 		existing_cdep->ancestry      = collector->ancestry;
 		existing_cdep->version       = version;
 		existing_cdep->cmake_options = cmake_options;
 		existing_cdep->depth         = depth;
 		return;
 	}
+	ctx->log->detail(pmr_format(ctx, "We haven't seen '{}' yet so creating a new collected dep for it", name));
 	auto cdep = collected_dep {
 		.dep           = *dep,
 		.ancestry      = collector->ancestry,
