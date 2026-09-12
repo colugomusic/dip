@@ -37,29 +37,29 @@ struct args {
 
 [[nodiscard]]
 auto get_arg(const context*, arg_cache, const argparse::ArgumentParser& parser) -> arg_cache {
-	if (parser.is_used(ARG_CACHE_NAME_LONG)) {
-		return {parser.get<std::string>(ARG_CACHE_NAME_LONG)};
+	if (parser.is_used(ARG_CACHE_LONG)) {
+		return {parser.get<std::string>(ARG_CACHE_LONG)};
 	}
 	return {};
 }
 
 [[nodiscard]]
 auto get_arg(const context*, arg_root, const argparse::ArgumentParser& parser) -> arg_root {
-	if (parser.is_used(ARG_ROOT_NAME_LONG)) {
-		return {parser.get<std::string>(ARG_ROOT_NAME_LONG)};
+	if (parser.is_used(ARG_ROOT_LONG)) {
+		return {parser.get<std::string>(ARG_ROOT_LONG)};
 	}
 	return {};
 }
 
 [[nodiscard]]
 auto get_arg(const context*, arg_project_dir, const argparse::ArgumentParser& parser) -> arg_project_dir {
-	return {parser.get<std::string>(ARG_PROJECT_NAME_LONG)};
+	return {parser.get<std::string>(ARG_PROJECT_LONG)};
 }
 
 [[nodiscard]]
 auto get_arg(const context* ctx, arg_cfg, const argparse::ArgumentParser& parser) -> arg_cfg {
-	if (parser.is_used(ARG_CFG_NAME_LONG)) {
-		const auto value = parser.get<std::string>(ARG_CFG_NAME_LONG);
+	if (parser.is_used(ARG_CFG_LONG)) {
+		const auto value = parser.get<std::string>(ARG_CFG_LONG);
 		return arg_cfg{ split_csv(ctx, value) };
 	}
 	return {};
@@ -67,8 +67,8 @@ auto get_arg(const context* ctx, arg_cfg, const argparse::ArgumentParser& parser
 
 [[nodiscard]]
 auto get_arg(const context* ctx, arg_track, const argparse::ArgumentParser& parser) -> arg_track {
-	if (parser.is_used(ARG_TRACK_NAME_LONG)) {
-		const auto value = parser.get<std::string>(ARG_TRACK_NAME_LONG);
+	if (parser.is_used(ARG_TRACK_LONG)) {
+		const auto value = parser.get<std::string>(ARG_TRACK_LONG);
 		if (value == ARG_TRACK_ALL_VALUE) { return ARG_TRACK_ALL; }
 		else                              { return arg_track{ split_csv(ctx, value) }; }
 	}
@@ -77,8 +77,8 @@ auto get_arg(const context* ctx, arg_track, const argparse::ArgumentParser& pars
 
 [[nodiscard]]
 auto get_arg(const context* ctx, arg_reacquire, const argparse::ArgumentParser& parser) -> arg_reacquire {
-	if (parser.is_used(ARG_REACQUIRE_NAME_LONG)) {
-		const auto value = parser.get<std::string>(ARG_REACQUIRE_NAME_LONG);
+	if (parser.is_used(ARG_REACQUIRE_LONG)) {
+		const auto value = parser.get<std::string>(ARG_REACQUIRE_LONG);
 		return arg_reacquire{ split_csv(ctx, value) };
 	}
 	return {};
@@ -86,75 +86,86 @@ auto get_arg(const context* ctx, arg_reacquire, const argparse::ArgumentParser& 
 
 [[nodiscard]]
 auto get_arg(const context* ctx, arg_reinstall, const argparse::ArgumentParser& parser) -> arg_reinstall {
-	if (parser.is_used(ARG_REINSTALL_NAME_LONG)) {
-		const auto value = parser.get<std::string>(ARG_REINSTALL_NAME_LONG);
+	if (parser.is_used(ARG_REINSTALL_LONG)) {
+		const auto value = parser.get<std::string>(ARG_REINSTALL_LONG);
 		return arg_reinstall{ split_csv(ctx, value) };
 	}
 	return {};
 }
 
 [[nodiscard]]
+auto get_arg(const context*, arg_install_self, const argparse::ArgumentParser& parser) -> arg_install_self {
+    return {parser.get<bool>(ARG_INSTALL_SELF_LONG)};
+}
+
+[[nodiscard]]
 auto get_arg(const context*, arg_quiet, const argparse::ArgumentParser& parser) -> arg_quiet {
-    return {parser.get<bool>(ARG_QUIET_NAME_LONG)};
+    return {parser.get<bool>(ARG_QUIET_LONG)};
 }
 
 [[nodiscard]]
 auto get_arg(const context*, arg_stfu, const argparse::ArgumentParser& parser) -> arg_stfu {
-    return {parser.get<bool>(ARG_STFU_NAME_LONG)};
+    return {parser.get<bool>(ARG_STFU_LONG)};
 }
 
 [[nodiscard]]
 auto get_arg(const context*, arg_verbose, const argparse::ArgumentParser& parser) -> arg_verbose {
-    return {parser.get<bool>(ARG_VERBOSE_NAME_LONG)};
+    return {parser.get<bool>(ARG_VERBOSE_LONG)};
 }
 
 [[nodiscard]]
 auto get_args(const context* ctx, int argc, const char* argv[]) -> args {
 	auto arg_parser = argparse::ArgumentParser{PROGRAM_NAME, PROGRAM_VERSION};
 	arg_parser
-		.add_argument(ARG_CACHE_NAME_SHORT, ARG_CACHE_NAME_LONG)
+		.add_argument(ARG_CACHE_SHORT, ARG_CACHE_LONG)
 		.help(ARG_CACHE_HELP)
 		;
 	arg_parser
-		.add_argument(ARG_ROOT_NAME_SHORT, ARG_ROOT_NAME_LONG)
+		.add_argument(ARG_ROOT_SHORT, ARG_ROOT_LONG)
 		.help(ARG_ROOT_HELP)
 		;
 	arg_parser
-		.add_argument(ARG_CFG_NAME_LONG)
+		.add_argument(ARG_CFG_LONG)
 		.help(ARG_CFG_HELP)
 		;
 	arg_parser
-		.add_argument(ARG_TRACK_NAME_SHORT, ARG_TRACK_NAME_LONG)
+		.add_argument(ARG_TRACK_SHORT, ARG_TRACK_LONG)
 		.default_value(ARG_TRACK_ALL_VALUE)
 		.help(ARG_TRACK_HELP)
 		;
 	arg_parser
-		.add_argument(ARG_REACQUIRE_NAME_LONG)
+		.add_argument(ARG_REACQUIRE_LONG)
 		.help(ARG_REACQUIRE_HELP)
 		;
 	arg_parser
-		.add_argument(ARG_REINSTALL_NAME_LONG)
+		.add_argument(ARG_REINSTALL_LONG)
 		.help(ARG_REINSTALL_HELP)
 		;
 	arg_parser
-		.add_argument(ARG_PROJECT_NAME_SHORT, ARG_PROJECT_NAME_LONG)
+		.add_argument(ARG_INSTALL_SELF_SHORT, ARG_INSTALL_SELF_LONG)
+		.default_value(false)
+		.implicit_value(true)
+		.help(ARG_INSTALL_SELF_HELP)
+		;
+	arg_parser
+		.add_argument(ARG_PROJECT_SHORT, ARG_PROJECT_LONG)
 		.default_value(ctx->cwd.string())
 		.help(ARG_PROJECT_HELP)
 		;
 	arg_parser
-		.add_argument(ARG_QUIET_NAME_SHORT, ARG_QUIET_NAME_LONG)
+		.add_argument(ARG_QUIET_SHORT, ARG_QUIET_LONG)
 		.default_value(false)
 		.implicit_value(true)
 		.help(ARG_QUIET_HELP)
 		;
 	arg_parser
-		.add_argument(ARG_STFU_NAME_LONG)
+		.add_argument(ARG_STFU_LONG)
 		.default_value(false)
 		.implicit_value(true)
 		.help(ARG_STFU_HELP)
 		;
 	arg_parser
-		.add_argument(ARG_VERBOSE_NAME_SHORT, ARG_VERBOSE_NAME_LONG)
+		.add_argument(ARG_VERBOSE_SHORT, ARG_VERBOSE_LONG)
 		.default_value(false)
 		.implicit_value(true)
 		.help(ARG_VERBOSE_HELP)
@@ -168,6 +179,7 @@ auto get_args(const context* ctx, int argc, const char* argv[]) -> args {
 		.reacquire   = get_arg(ctx, arg_reacquire{}, arg_parser),
 		.reinstall   = get_arg(ctx, arg_reinstall{}, arg_parser),
 		.track       = get_arg(ctx, arg_track{}, arg_parser),
+		.install_self= get_arg(ctx, arg_install_self{}, arg_parser),
 		.verbose     = get_arg(ctx, arg_verbose{}, arg_parser),
 		.quiet       = get_arg(ctx, arg_quiet{}, arg_parser),
 		.stfu        = get_arg(ctx, arg_stfu{}, arg_parser),

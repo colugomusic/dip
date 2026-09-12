@@ -46,8 +46,10 @@ auto origin_to_bytes(context* ctx, const origin_git_tracked_branch& v) -> std::p
 	auto bytes = std::pmr::vector<std::byte>{ctx->mem};
 	const auto url_bytes    = to_bytes(ctx, v.url);
 	const auto branch_bytes = to_bytes(ctx, v.branch);
+	const auto commit_bytes = to_bytes(ctx, v.commit);
 	std::ranges::copy(url_bytes, std::back_inserter(bytes));
 	std::ranges::copy(branch_bytes, std::back_inserter(bytes));
+	std::ranges::copy(commit_bytes, std::back_inserter(bytes));
 	return bytes;
 }
 

@@ -14,6 +14,7 @@ using origin = std::variant<std::filesystem::path, origin_git_repo, origin_git_t
 
 struct dep {
 	std::pmr::string name;
+	std::pmr::vector<std::pmr::string> package_names;
 	dip::origin origin;
 	dip::cmake_options cmake_options;
 };

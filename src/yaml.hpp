@@ -15,6 +15,7 @@ using node_t = fkyaml::basic_node<std::vector, std::unordered_map>;
 
 struct yml_project_settings {
 	std::pmr::string name;
+	std::pmr::vector<std::pmr::string> package_names;
 	dip::cmake_options cmake_options;
 	std::pmr::vector<std::pmr::string> cmake_configs;
 };
@@ -188,14 +189,37 @@ auto find_cmake_options(context* ctx, const node_t& mapping) -> cmake_options {
 }
 
 [[nodiscard]]
+auto get_package_names(context* ctx, const node_t& mapping) -> std::pmr::vector<std::pmr::string> {
+	auto package_names = std::pmr::vector<std::pmr::string>{ctx->mem};
+	if (mapping.contains(KEY_PACKAGE_NAMES)) {
+		const auto pkg_names_node = mapping.at(KEY_PACKAGE_NAMES);
+		if (!pkg_names_node.is_sequence()) {
+			throw std::runtime_error{std::format("The '{}' key must be a sequence, but found '{}'.", KEY_PACKAGE_NAMES, fkyaml::to_string(pkg_names_node.get_type()))};
+		}
+		for (const auto& pkg_name_node : pkg_names_node) {
+			if (!pkg_name_node.is_string()) {
+				throw std::runtime_error{std::format("Each item in the '{}' sequence must be a string, but found '{}'.", KEY_PACKAGE_NAMES, fkyaml::to_string(pkg_name_node.get_type()))};
+			}
+			package_names.push_back(to_pmr_string(ctx, pkg_name_node.get_value<std::string>()));
+		}
+	}
+	return package_names;
+}
+
+[[nodiscard]]
 auto read_project_settings_yml(context* ctx, const std::filesystem::path& dip_dir) -> yml_project_settings {
 	const auto path = dip_dir / FILENAME_SETTINGS_YML;
 	if (std::filesystem::exists(path)) {
 		ctx->log->detail(pmr_format(ctx, "Reading project settings from '{}'", path.string()));
 		if (const auto text = read_file_text(ctx, path)) {
 			const auto node = node_t::deserialize(*text);
+			const auto name = find_string(ctx, node, KEY_NAME);
+			if (!name) {
+				throw std::runtime_error{std::format("The '{}' key is required in project settings, but was not found in '{}'.", KEY_NAME, path.string())};
+			}
 			return yml_project_settings {
-				.name          = find_string(ctx, node, KEY_NAME).value_or({}),
+				.name          = *name,
+				.package_names = get_package_names(ctx, node),
 				.cmake_options = find_cmake_options(ctx, node),
 				.cmake_configs = find_cmake_config_list(ctx, node)
 			};
@@ -209,10 +233,12 @@ auto read_project_settings_yml(context* ctx, const std::filesystem::path& dip_di
 auto read_dep_yml(context* ctx, const node_t& mapping) -> dip::dep {
 	if (!mapping.is_mapping())       { throw std::runtime_error{std::format("Each item in the registry must be a mapping, but found '{}'.", fkyaml::to_string(mapping.get_type()))}; }
 	if (!mapping.contains(KEY_NAME)) { throw std::runtime_error{std::format("Each item in the registry must contain a '{}' key.", KEY_NAME)}; }
-	auto name   = to_pmr_string(ctx, mapping, KEY_NAME);
-	auto origin = find_origin(ctx, mapping);
+	auto name          = to_pmr_string(ctx, mapping, KEY_NAME);
+	auto origin        = find_origin(ctx, mapping);
+	auto package_names = get_package_names(ctx, mapping);
 	return dip::dep {
 		.name          = std::move(name),
+		.package_names = std::move(package_names),
 		.origin        = std::move(origin),
 		.cmake_options = find_cmake_options(ctx, mapping),
 	};
@@ -247,7 +273,7 @@ auto read_registry_yml(context* ctx, const std::filesystem::path& path) -> yml_r
 }
 
 auto map_origin_into(node_t::mapping_type* mapping, const std::filesystem::path& origin) -> void {
-	(*mapping)[KEY_PATH] = origin;
+	(*mapping)[KEY_PATH] = origin.string();
 }
 
 auto map_origin_into(node_t::mapping_type* mapping, const origin_git_repo& origin) -> void {

@@ -10,6 +10,9 @@ namespace dip {
 auto get_latest_git_commit_hash(context* ctx, const dip::prog_paths& progs, std::string_view url, std::string_view branch) -> std::pmr::string {
 	const auto args     = pmr_format(ctx, "ls-remote {} {}", url, branch);
 	const auto prog_out = run_process_and_return_stdout(ctx, progs.git, args);
+	if (prog_out.empty()) {
+		throw std::runtime_error{std::format("Failed to get latest commit hash for git repo at '{}' on branch '{}'. Does this branch definitely exist?", url, branch)};
+	}
 	return get_first_word(ctx, prog_out);
 }
 

@@ -10,6 +10,8 @@
 #include "wget.hpp"
 #include "yaml.hpp"
 #include "zip.hpp"
+#include <cassert>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -225,17 +227,6 @@ auto get_prog_paths(const requirements& reqs) -> dip::prog_paths {
 }
 
 [[nodiscard]]
-auto make_self_dep(context* ctx, std::string_view project_name, const std::filesystem::path& project_dir) -> dep {
-	if (project_name.empty()) {
-		throw std::runtime_error{"Can't self-install this project because settings.yml doesn't contain a 'name' key."};
-	}
-	return dip::dep{
-		.name   = to_pmr_string(ctx, project_name),
-		.origin = project_dir
-	};
-}
-
-[[nodiscard]]
 auto make_ancestry(context* ctx, dip::ancestry parent_ancestry, std::string_view dep_name) -> dip::ancestry {
 	auto list = std::move(parent_ancestry);
 	list.push_back(to_string(ctx, dep_name));
@@ -389,9 +380,25 @@ auto to_acquire(context* ctx, const dip::state& state, const dip::collector& col
 }
 
 [[nodiscard]]
-auto to_install(context* ctx, const dip::state& state, const dip::collector_result& collector_result, const dip::installer& installer, std::string_view dep_name, std::string_view cmake_config) -> bool {
+auto get_package_names_to_search_for(context* ctx, std::string_view dep_name, std::span<const std::pmr::string> package_names) -> std::pmr::vector<std::pmr::string> {
+	auto list = std::pmr::vector<std::pmr::string>{ctx->mem};
+	if (package_names.empty()) {
+		list.push_back(to_pmr_string(ctx, dep_name));
+		return list;
+	}
+	std::ranges::copy(package_names, std::back_inserter(list));
+	return list;
+}
+
+[[nodiscard]]
+auto get_package_names_to_search_for(context* ctx, const dip::dep& dep) -> std::pmr::vector<std::pmr::string> {
+	return get_package_names_to_search_for(ctx, dep.name, dep.package_names);
+}
+
+[[nodiscard]]
+auto to_install(context* ctx, const dip::state& state, const dip::collector_result& collector_result, const dip::installer& installer, std::string_view dep_name, std::span<const std::pmr::string> package_names, std::string_view cmake_config) -> bool {
 	return
-		!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, dep_name, cmake_config) ||
+		!cmake_packages_can_be_found(ctx, state.dirs, state.prog_paths, get_package_names_to_search_for(ctx, dep_name, package_names), cmake_config) ||
 		user_requested_reinstall(installer.work_to_do, dep_name) ||
 		were_any_subdependencies_of_this_installed(&installer, dep_name) ||
 		was_this_just_acquired(collector_result, dep_name);
@@ -400,13 +407,13 @@ auto to_install(context* ctx, const dip::state& state, const dip::collector_resu
 [[nodiscard]]
 auto make_ancestry_string(context* ctx, const std::pmr::vector<std::pmr::string>& ancestry) -> std::pmr::string {
 	if (ancestry.empty()) { return std::pmr::string{ctx->mem}; }
-	return join<std::pmr::string>(ctx, ancestry, " -> ");
+	return join<std::pmr::string>(ctx, ancestry, " | ");
 }
 
 [[nodiscard]]
 auto decorate(context* ctx, const dip::ancestry& ancestry, std::string_view dep_name) -> std::pmr::string {
 	if (ancestry.empty()) { return to_pmr_string(ctx, dep_name); }
-	else                  { return pmr_format(ctx, "{} -> {}", make_ancestry_string(ctx, ancestry), dep_name); }
+	else                  { return pmr_format(ctx, "{} | {}", make_ancestry_string(ctx, ancestry), dep_name); }
 }
 
 [[nodiscard]]
@@ -455,12 +462,13 @@ auto md5_check_or_update(context* ctx, dip::dep* dep, const std::filesystem::pat
 }
 
 auto acquire_src_from_origin(context* ctx, dip::dep* dep, const dip::state& state, const dip::collector& collector, std::string_view version, const std::filesystem::path& origin) -> void {
-	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep->name), pmr_format(ctx, "Copying source code from '{}'", origin.string()));
-	print_and_clear_log(ctx);
 	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, version);
+	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep->name), pmr_format(ctx, "Copying source code from '{}' to '{}'", origin.string(), src_dir_path.string()));
+	print_and_clear_log(ctx);
 	const auto copy_options =
 		std::filesystem::copy_options::recursive |
 		std::filesystem::copy_options::overwrite_existing;
+	std::filesystem::create_directories(src_dir_path);
 	std::filesystem::copy(origin, src_dir_path, copy_options);
 }
 
@@ -514,8 +522,10 @@ auto install(context* ctx, const dip::state& state, const dip::collected_dep& cd
 	ctx->log->dep_cfg_task(decorate(ctx, cdep), to_pmr_string(ctx, cmake_config), pmr_format(ctx, "Install"));
 	print_and_clear_log(ctx);
 	cmake_install(ctx, state.prog_paths, bld_dir_path, cmake_config);
-	if (!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, cdep.dep.name, cmake_config)) {
-		throw std::runtime_error{std::format("CMake could still not find package '{}' after installing it.", cdep.dep.name)};
+	for (const auto& package_name : get_package_names_to_search_for(ctx, cdep.dep)) {
+		if (!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, package_name, cmake_config)) {
+			throw std::runtime_error{std::format("CMake could still not find package '{}' after installing it. This is usually an indication that the dependency has a broken CMakeLists.txt.", cdep.dep.name)};
+		}
 	}
 }
 
@@ -543,13 +553,19 @@ auto get_dep_registry_to_use(context* ctx, const std::filesystem::path& dip_dir,
 }
 
 [[nodiscard]]
-auto run_dip_on(context* ctx, const dip::state& state, const dip::collector& collector, const dip::dep& dep, std::string_view version, const std::pmr::vector<std::pmr::string>& cmake_options, const std::filesystem::path& registry_override, int depth) -> bool {
+auto run_dip_on(context* ctx, const dip::state& state, const dip::collector& collector, dip::dep dep, std::string_view version, const std::pmr::vector<std::pmr::string>& cmake_options, const std::filesystem::path& registry_override, int depth) -> bool {
 	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, version);
 	if (const auto dip_dir = find_dip_dir(ctx, src_dir_path)) {
 		ctx->log->detail(pmr_format(ctx, "Found '{}' directory at '{}'", DIR_PROJECT_DIP, dip_dir->string()));
+		const auto dep_settings  = read_project_settings_yml(ctx, *dip_dir);
 		const auto registry_path = get_dep_registry_to_use(ctx, *dip_dir, registry_override);
 		auto dep_collector       = init_collector_for_dependency_subprocessing(ctx, collector.ancestry, state.work_requested, dep.name, registry_path, collector.result);
 		run_collector(ctx, state, &dep_collector, depth + 1);
+		// If consumer didn't specify package names, use the
+		// package names specified in the dependency settings.
+		if (dep.package_names.empty()) {
+			dep.package_names = dep_settings.package_names;
+		}
 		// Collect self
 		auto self_cdep = collected_dep {
 			.dep           = dep,
@@ -640,7 +656,7 @@ auto run_collector(context* ctx, const dip::state& state, dip::collector* collec
 
 auto install(context* ctx, const dip::state& state, const dip::collector_result& collector_result, dip::installer* installer, const collected_dep& cdep) -> void {
 	for (const auto cmake_config : installer->work_to_do.cmake_configs) {
-		if (to_install(ctx, state, collector_result, *installer, cdep.dep.name, cmake_config)) {
+		if (to_install(ctx, state, collector_result, *installer, cdep.dep.name, cdep.dep.package_names, cmake_config)) {
 			configure_build_install(ctx, state, cdep, cmake_config);
 			if (const auto parent = get_parent(ctx, cdep.ancestry); !parent.empty()) {
 				remember_that_a_subdependency_of_this_was_installed(ctx, installer, parent);
@@ -680,19 +696,48 @@ auto init_collector_result(context* ctx) -> dip::collector_result {
 }
 
 [[nodiscard]]
+auto make_self_dep(context* ctx, const yml_project_settings& settings, const std::filesystem::path& project_dir) -> dep {
+	if (settings.name.empty()) {
+		throw std::runtime_error{"Can't self-install this project because it has no project name."};
+	}
+	return dip::dep{
+		.name          = to_pmr_string(ctx, settings.name),
+		.package_names = settings.package_names,
+		.origin        = project_dir,
+	};
+}
+
+[[nodiscard]]
+auto get_initial_registry(context* ctx, const yml_project_settings& settings, const std::filesystem::path& project_dir, const std::filesystem::path& dip_dir, bool install_self) -> yml_registry {
+	if (install_self) {
+		auto registry = yml_registry{
+			.deps = std::pmr::vector<dep>{ctx->mem}
+		};
+		registry.deps.push_back(make_self_dep(ctx, settings, project_dir));
+		return registry;
+	}
+	else {
+		return read_registry_yml(ctx, dip_dir / FILENAME_REGISTRY_YML);
+	}
+}
+
+[[nodiscard]]
 auto happy_path(context* ctx, int argc, const char* argv[]) -> int {
 	os::enable_ansi_colors();
 	const auto args    = get_args(ctx, argc, argv);
 	ctx->print_options = make_print_options(args);
 	if (const auto reqs = check_requirements(ctx)) {
 		if (const auto dip_dir = find_dip_dir(ctx, args.project_dir.v)) {
-			const auto no_ancestry      = dip::ancestry{ctx->mem};
-			const auto initial_registry = read_registry_yml(ctx, *dip_dir / FILENAME_REGISTRY_YML);
-			auto state = init_state(ctx, args, *reqs, *dip_dir);
-			auto collector_result = init_collector_result(ctx);
-			auto collector = init_collector(ctx, no_ancestry, initial_registry, state.work_requested, &collector_result);
+			const auto no_ancestry   = dip::ancestry{ctx->mem};
+			const auto save_registry = !args.install_self.v;
+			auto state               = init_state(ctx, args, *reqs, *dip_dir);
+			auto registry            = get_initial_registry(ctx, state.project_settings, args.project_dir.v, *dip_dir, args.install_self.v);
+			auto collector_result    = init_collector_result(ctx);
+			auto collector           = init_collector(ctx, no_ancestry, registry, state.work_requested, &collector_result);
 			run_collector(ctx, state, &collector, 0);
-			save_to(ctx, collector.registry, *dip_dir / FILENAME_REGISTRY_YML);
+			if (save_registry) {
+				save_to(ctx, collector.registry, *dip_dir / FILENAME_REGISTRY_YML);
+			}
 			auto installer = init_installer(ctx, state.project_settings, state.work_requested);
 			run_installer(ctx, state, collector_result, &installer);
 			print_cmake_prefix_help(ctx, state.dirs, installer.work_to_do.cmake_configs);

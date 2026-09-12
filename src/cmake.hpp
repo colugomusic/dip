@@ -35,6 +35,12 @@ auto cmake_package_can_be_found(context* ctx, const dip::dirs& dirs, const prog_
 	return found;
 }
 
+[[nodiscard]]
+auto cmake_packages_can_be_found(context* ctx, const dip::dirs& dirs, const prog_paths& progs, std::span<const std::pmr::string> package_names, std::string_view cmake_config) -> bool {
+	auto fn_can_be_found = [ctx, &dirs, &progs, cmake_config](std::string_view name) { return cmake_package_can_be_found(ctx, dirs, progs, name, cmake_config); };
+	return std::ranges::all_of(package_names, fn_can_be_found);
+}
+
 auto cmake_configure(context* ctx, const prog_paths& progs, const std::filesystem::path& install_prefix, const std::filesystem::path& src_dir, const std::filesystem::path& bld_dir, std::string_view cmake_config, std::string_view cmake_options) -> void {
 	const auto args = pmr_format(ctx,
 		"-B {} "
