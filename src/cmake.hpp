@@ -13,7 +13,7 @@ namespace dip {
 auto make_find_package_cmakelists(context* ctx, std::string_view name) -> std::pmr::string {
 	return pmr_format(ctx,
 		"cmake_minimum_required(VERSION 3.30)\n"
-		"project(dip-package-find-test CXX)\n"
+		"project(dip-package-find-test LANGUAGES C CXX)\n"
 		"find_package({} REQUIRED CONFIG NO_CMAKE_SYSTEM_PATH NO_SYSTEM_ENVIRONMENT_PATH NO_CMAKE_SYSTEM_PACKAGE_REGISTRY)\n",
 		name
 	);
