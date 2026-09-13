@@ -19,7 +19,7 @@ namespace dip {
 
 using std::string_view_literals::operator""sv;
 
-auto operator""_MB(uint64_t v) -> uint64_t { return 1024 * 1024 * v; }
+auto operator""_MB(unsigned long long v) -> uint64_t { return 1024 * 1024 * v; }
 
 using ancestry = std::pmr::vector<std::pmr::string>;
 
