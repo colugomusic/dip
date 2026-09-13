@@ -11,7 +11,7 @@
 
 namespace dip {
 
-using node_t = fkyaml::basic_node<std::vector, std::unordered_map>;
+using node_t = fkyaml::basic_node<std::vector, fkyaml::ordered_map>;
 
 struct yml_project_settings {
 	std::pmr::string name;
