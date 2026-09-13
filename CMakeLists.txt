@@ -62,6 +62,7 @@ target_sources(dip PRIVATE
 	src/wget.hpp
 	$<${is_linux}:src/os-lin.cpp>
 	$<${is_macos}:src/os-mac.cpp>
+	$<${is_unix}:src/os-unix.cpp>
 	$<${is_windows}:src/os-win.cpp>
 )
 target_link_libraries(dip PRIVATE
