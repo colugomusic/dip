@@ -2,6 +2,7 @@
 #include <array>
 #include <cstdlib>
 #include <filesystem>
+#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>

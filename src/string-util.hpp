@@ -1,6 +1,7 @@
 #pragma once
 
 #include "context.hpp"
+#include <ranges>
 #include <span>
 
 namespace dip {

@@ -23,10 +23,7 @@
 			"displayName": "Windows: Ninja (cl.exe)",
 			"hidden": true,
 			"inherits": "cfg-base",
-			"generator": "Ninja",
-			"cacheVariables": {
-				"CMAKE_TOOLCHAIN_FILE": "toolchain-windows-cl.cmake"
-			}
+			"generator": "Ninja"
 		},
 		{
 			"name": "cfg-macos-ninja",
@@ -35,8 +32,7 @@
 			"inherits": "cfg-base",
 			"generator": "Ninja",
 			"cacheVariables": {
-				"CMAKE_OSX_ARCHITECTURES": "arm64;x86_64",
-				"CMAKE_TOOLCHAIN_FILE": "toolchain-macos.cmake"
+				"CMAKE_OSX_ARCHITECTURES": "arm64;x86_64"
 			}
 		},
 		{
