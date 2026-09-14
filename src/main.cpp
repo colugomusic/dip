@@ -162,11 +162,11 @@ auto get_cmake_configs_to_process(context*, const yml_project_settings& settings
 auto print_info_about_default_directories(context* ctx, const dip::args& args, const std::filesystem::path& sys_cache_dir, const std::filesystem::path& cache, const std::filesystem::path& root) -> void {
 	const auto arg_cache = args.cache.v;
 	const auto arg_root  = args.root.v;
-	if (arg_cache && arg_root) {
+	if (arg_cache && !arg_root.empty()) {
 		return;
 	}
 	ctx->log->detail(pmr_format(ctx, "System cache folder is: '{}'", sys_cache_dir.string()));
-	if (!arg_cache && !arg_root) {
+	if (!arg_cache && arg_root.empty()) {
 		ctx->log->info(pmr_format(ctx,
 			"Using these default directory paths because you didn't specify them:\n"
 			" - cache: '{}' (override with --cache path/to/cache)\n"
@@ -188,7 +188,7 @@ auto print_info_about_default_directories(context* ctx, const dip::args& args, c
 		}
 		return;
 	}
-	if (!arg_root) {
+	if (arg_root.empty()) {
 		ctx->log->info(pmr_format(ctx,
 			"Using '{}' as root because you didn't specify one.\n"
 			"If you're not happy with this then specify a root with --root \"path/to/root\"",
@@ -197,10 +197,27 @@ auto print_info_about_default_directories(context* ctx, const dip::args& args, c
 	}
 }
 
+[[nodiscard]]
+auto get_cache_dir(const std::filesystem::path& sys_cache_dir, const dip::args& args) -> std::filesystem::path {
+	return args.cache.v.value_or(sys_cache_dir / "dip-cache");
+}
+
+[[nodiscard]]
+auto get_root_dir(const std::filesystem::path& sys_cache_dir, const dip::args& args, std::string_view project_name) -> std::filesystem::path {
+	if (args.root.v.empty()) { return sys_cache_dir / "dip-root" / project_name; }
+	else                     { return args.root.v.front(); }
+}
+
+[[nodiscard]]
+auto get_root_dirs(context* ctx, const std::filesystem::path& sys_cache_dir, const dip::args& args) -> std::pmr::vector<std::filesystem::path> {
+	if (args.root.v.empty()) { return {{sys_cache_dir / "dip-root"}, ctx->mem}; }
+	else                     { return args.root.v; }
+}
+
 auto get_dirs(context* ctx, const dip::args& args, std::string_view project_name) -> dip::dirs {
 	const auto sys_cache_dir = os::get_system_cache_dir();
-	auto cache = args.cache.v.value_or(sys_cache_dir / "dip-cache");
-	auto root  = args.root.v.value_or(sys_cache_dir / "dip-root" / project_name);
+	auto cache = get_cache_dir(sys_cache_dir, args);
+	auto root  = get_root_dir(sys_cache_dir, args, project_name);
 	print_info_about_default_directories(ctx, args, sys_cache_dir, cache, root);
 	return dip::dirs{
 		.cache   = cache,
@@ -396,12 +413,32 @@ auto get_package_names_to_search_for(context* ctx, const dip::dep& dep) -> std::
 }
 
 [[nodiscard]]
-auto to_install(context* ctx, const dip::state& state, const dip::collector_result& collector_result, const dip::installer& installer, std::string_view dep_name, std::span<const std::pmr::string> package_names, std::string_view cmake_config) -> bool {
+auto make_meta_file_path(const dip::dirs& dirs, const collected_dep& cdep, std::string_view cmake_config) -> std::filesystem::path {
+	const auto meta_dir      = make_install_meta_path(dirs, cmake_config);
+	const auto meta_filename = cdep.dep.name + ".yml";
+	std::filesystem::create_directories(meta_dir);
+	return (meta_dir / meta_filename);
+}
+
+[[nodiscard]]
+auto wrong_version_installed(context* ctx, const dip::dirs& dirs, const collected_dep& cdep, std::string_view cmake_config) -> bool {
+	const auto meta_file_path = make_meta_file_path(dirs, cdep, cmake_config);
+	const auto meta           = read_meta_yml(ctx, meta_file_path);
+	if (meta.version != cdep.version) {
+		ctx->log->detail(pmr_format(ctx, "Installed version '{}' does not match required version '{}'", meta.version, cdep.version));
+		return true;
+	}
+	return false;
+}
+
+[[nodiscard]]
+auto to_install(context* ctx, const dip::state& state, const dip::collector_result& collector_result, const dip::installer& installer, const collected_dep& cdep, std::string_view cmake_config) -> bool {
 	return
-		!cmake_packages_can_be_found(ctx, state.dirs, state.prog_paths, get_package_names_to_search_for(ctx, dep_name, package_names), cmake_config) ||
-		user_requested_reinstall(installer.work_to_do, dep_name) ||
-		were_any_subdependencies_of_this_installed(&installer, dep_name) ||
-		was_this_just_acquired(collector_result, dep_name);
+		!cmake_packages_can_be_found(ctx, state.dirs, state.prog_paths, get_package_names_to_search_for(ctx, cdep.dep.name, cdep.dep.package_names), cmake_config) ||
+		wrong_version_installed(ctx, state.dirs, cdep, cmake_config) ||
+		user_requested_reinstall(installer.work_to_do, cdep.dep.name) ||
+		were_any_subdependencies_of_this_installed(&installer, cdep.dep.name) ||
+		was_this_just_acquired(collector_result, cdep.dep.name);
 }
 
 [[nodiscard]]
@@ -518,6 +555,10 @@ auto build(context* ctx, const dip::state& state, const dip::collected_dep& cdep
 	cmake_build(ctx, state.prog_paths, bld_dir_path, cmake_config);
 }
 
+auto write_successful_install_meta_file(context* ctx, const dip::dirs& dirs, const dip::collected_dep& cdep, std::string_view cmake_config) -> void {
+	save_to(ctx, yml_meta{.version = cdep.version}, make_meta_file_path(dirs, cdep, cmake_config));
+}
+
 auto install(context* ctx, const dip::state& state, const dip::collected_dep& cdep, const std::filesystem::path& bld_dir_path, std::string_view cmake_config) -> void {
 	ctx->log->dep_cfg_task(decorate(ctx, cdep), to_pmr_string(ctx, cmake_config), pmr_format(ctx, "Install"));
 	print_and_clear_log(ctx);
@@ -526,6 +567,7 @@ auto install(context* ctx, const dip::state& state, const dip::collected_dep& cd
 		if (!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, package_name, cmake_config)) {
 			throw std::runtime_error{std::format("CMake could still not find package '{}' after installing it. This is usually an indication that the dependency has a broken CMakeLists.txt.", cdep.dep.name)};
 		}
+		write_successful_install_meta_file(ctx, state.dirs, cdep, cmake_config);
 	}
 }
 
@@ -664,7 +706,7 @@ auto run_collector(context* ctx, const dip::state& state, dip::collector* collec
 
 auto install(context* ctx, const dip::state& state, const dip::collector_result& collector_result, dip::installer* installer, const collected_dep& cdep) -> void {
 	for (const auto cmake_config : installer->work_to_do.cmake_configs) {
-		if (to_install(ctx, state, collector_result, *installer, cdep.dep.name, cdep.dep.package_names, cmake_config)) {
+		if (to_install(ctx, state, collector_result, *installer, cdep, cmake_config)) {
 			configure_build_install(ctx, state, cdep, cmake_config);
 			if (const auto parent = get_parent(ctx, cdep.ancestry); !parent.empty()) {
 				remember_that_a_subdependency_of_this_was_installed(ctx, installer, parent);
@@ -730,28 +772,101 @@ auto get_initial_registry(context* ctx, const yml_project_settings& settings, co
 }
 
 [[nodiscard]]
+auto get_all_dep_versions_in_meta_dir(context* ctx, const std::filesystem::path& meta_dir) -> std::pmr::vector<std::pmr::string> {
+	auto list = std::pmr::vector<std::pmr::string>{ctx->mem};
+	for (const auto& entry : std::filesystem::directory_iterator{meta_dir}) {
+		if (entry.is_regular_file()) {
+			const auto meta = read_meta_yml(ctx, entry.path());
+			list.push_back(meta.version);
+		}
+	}
+	return list;
+}
+
+[[nodiscard]]
+auto get_all_dep_versions_in_install_dir(context* ctx, const std::filesystem::path& install_dir) -> std::pmr::vector<std::pmr::string> {
+	auto list = std::pmr::vector<std::pmr::string>{ctx->mem};
+	for (const auto& entry : std::filesystem::directory_iterator{install_dir}) {
+		if (entry.is_directory()) {
+			const auto cmake_config = to_string(ctx, entry.path().filename());
+			const auto meta_dir     = entry.path() / "meta";
+			list.append_range(get_all_dep_versions_in_meta_dir(ctx, meta_dir));
+		}
+	}
+	return list;
+}
+
+[[nodiscard]]
+auto get_root_installed_versions(context* ctx, const std::filesystem::path& root) -> std::pmr::vector<std::pmr::string> {
+	auto list = std::pmr::vector<std::pmr::string>{ctx->mem};
+	for (const auto& entry : std::filesystem::directory_iterator{root}) {
+		if (entry.is_directory()) {
+			const auto project_name = to_string(ctx, entry.path().filename());
+			const auto install_dir  = entry.path() / "install";
+			list.append_range(get_all_dep_versions_in_install_dir(ctx, install_dir));
+		}
+	}
+	return list;
+}
+
+[[nodiscard]]
+auto get_versions_to_preserve(context* ctx, std::span<const std::filesystem::path> roots_to_preserve) -> std::pmr::vector<std::pmr::string> {
+	auto fn_get_root_versions = [ctx](const std::filesystem::path& root) { return get_root_installed_versions(ctx, root); };
+	auto view = roots_to_preserve
+		| std::views::transform(fn_get_root_versions)
+		| std::views::join;
+	return sort_and_remove_duplicates(ctx, std::pmr::vector<std::pmr::string>{std::from_range, view, ctx->mem});
+}
+
+[[nodiscard]]
+auto do_cache_clean(context* ctx, const dip::args& args) -> int {
+	const auto sys_cache_dir        = os::get_system_cache_dir();
+	const auto cache_dir            = get_cache_dir(sys_cache_dir, args);
+	const auto root_dirs            = get_root_dirs(ctx, sys_cache_dir, args);
+	const auto versions_to_preserve = get_versions_to_preserve(ctx, root_dirs);
+	for (const auto& entry : std::filesystem::directory_iterator{cache_dir}) {
+		if (entry.is_directory()) {
+			const auto version = to_string(ctx, entry.path().filename());
+			if (!std::ranges::binary_search(versions_to_preserve, version)) {
+				ctx->log->info(pmr_format(ctx, "Removing cache directory '{}'", entry.path().string()));
+				print_and_clear_log(ctx);
+				std::filesystem::remove_all(entry.path());
+			}
+		}
+	}
+	return exit_success(ctx);
+}
+
+[[nodiscard]]
+auto do_dip(context* ctx, const dip::args& args, const requirements& reqs) -> int {
+	if (const auto dip_dir = find_dip_dir(ctx, args.project_dir.v)) {
+		const auto no_ancestry   = dip::ancestry{ctx->mem};
+		const auto save_registry = !args.install_self.v;
+		auto state               = init_state(ctx, args, reqs, *dip_dir);
+		auto registry            = get_initial_registry(ctx, state.project_settings, args.project_dir.v, *dip_dir, args.install_self.v);
+		auto collector_result    = init_collector_result(ctx);
+		auto collector           = init_collector(ctx, no_ancestry, registry, state.work_requested, &collector_result);
+		run_collector(ctx, state, &collector, 0);
+		if (save_registry) {
+			save_to(ctx, collector.registry, *dip_dir / FILENAME_REGISTRY_YML);
+		}
+		auto installer = init_installer(ctx, state.project_settings, state.work_requested);
+		run_installer(ctx, state, collector_result, &installer);
+		print_cmake_prefix_help(ctx, state.dirs, installer.work_to_do.cmake_configs);
+		return exit_success(ctx);
+	}
+	ctx->log->error(pmr_format(ctx, "No '{}' directory found in project directory '{}'", DIR_PROJECT_DIP, args.project_dir.v.string()));
+	return exit_failure(ctx);
+}
+
+[[nodiscard]]
 auto happy_path(context* ctx, int argc, const char* argv[]) -> int {
 	os::enable_ansi_colors();
 	const auto args    = get_args(ctx, argc, argv);
 	ctx->print_options = make_print_options(args);
 	if (const auto reqs = check_requirements(ctx)) {
-		if (const auto dip_dir = find_dip_dir(ctx, args.project_dir.v)) {
-			const auto no_ancestry   = dip::ancestry{ctx->mem};
-			const auto save_registry = !args.install_self.v;
-			auto state               = init_state(ctx, args, *reqs, *dip_dir);
-			auto registry            = get_initial_registry(ctx, state.project_settings, args.project_dir.v, *dip_dir, args.install_self.v);
-			auto collector_result    = init_collector_result(ctx);
-			auto collector           = init_collector(ctx, no_ancestry, registry, state.work_requested, &collector_result);
-			run_collector(ctx, state, &collector, 0);
-			if (save_registry) {
-				save_to(ctx, collector.registry, *dip_dir / FILENAME_REGISTRY_YML);
-			}
-			auto installer = init_installer(ctx, state.project_settings, state.work_requested);
-			run_installer(ctx, state, collector_result, &installer);
-			print_cmake_prefix_help(ctx, state.dirs, installer.work_to_do.cmake_configs);
-			return exit_success(ctx);
-		}
-		ctx->log->error(pmr_format(ctx, "No '{}' directory found in project directory '{}'", DIR_PROJECT_DIP, args.project_dir.v.string()));
+		if (args.cache_clean.v) { return do_cache_clean(ctx, args); }
+		else                    { return do_dip(ctx, args, *reqs); }
 	}
 	return exit_failure(ctx);
 }

@@ -2,6 +2,10 @@
 
 namespace dip {
 
+static constexpr auto ARG_CACHE_CLEAN_HELP     = "Clean up unreferenced sources and build files. When --cache-clean is specified then the --root argument can "
+                                                 "be a comma-separated list of absolute paths to to roots for which the installed dependencies should be preserved. "
+                                                 "Otherwise every install prefix in the default root folder will be preserved.";
+static constexpr auto ARG_CACHE_CLEAN_LONG     = "--cache-clean";
 static constexpr auto ARG_CACHE_HELP           = "Where to store source files and build dependencies.";
 static constexpr auto ARG_CACHE_LONG           = "--cache";
 static constexpr auto ARG_CACHE_SHORT          = "-c";
@@ -48,6 +52,7 @@ static constexpr auto KEY_NAME                 = "name";
 static constexpr auto KEY_PATH                 = "path";
 static constexpr auto KEY_TRACK                = "track";
 static constexpr auto KEY_URL                  = "url";
+static constexpr auto KEY_VERSION              = "version";
 static constexpr auto PROGRAM_NAME             = "dip";
 static constexpr auto PROGRAM_VERSION          = "1.0.0";
 

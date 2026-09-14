@@ -13,7 +13,8 @@ struct arg_reinstall    { std::pmr::vector<std::pmr::string> v; };
 struct arg_track        { std::pmr::vector<std::pmr::string> v; };
 struct arg_cache        { std::optional<std::filesystem::path> v; };
 struct arg_cfg          { std::pmr::vector<std::pmr::string> v; };
-struct arg_root         { std::optional<std::filesystem::path> v; };
+struct arg_root         { std::pmr::vector<std::filesystem::path> v; }; // vector of paths for when used with --cache-clean
+struct arg_cache_clean  { bool v = false; };
 struct arg_install_self { bool v = false; };
 struct arg_verbose      { bool v = false; };
 struct arg_quiet        { bool v = false; };
@@ -29,6 +30,7 @@ struct args {
 	arg_reacquire reacquire;
 	arg_reinstall reinstall;
 	arg_track track;
+	arg_cache_clean cache_clean;
 	arg_install_self install_self;
 	arg_verbose verbose;
 	arg_quiet quiet;
@@ -44,9 +46,12 @@ auto get_arg(const context*, arg_cache, const argparse::ArgumentParser& parser) 
 }
 
 [[nodiscard]]
-auto get_arg(const context*, arg_root, const argparse::ArgumentParser& parser) -> arg_root {
+auto get_arg(const context* ctx, arg_root, const argparse::ArgumentParser& parser) -> arg_root {
 	if (parser.is_used(ARG_ROOT_LONG)) {
-		return {parser.get<std::string>(ARG_ROOT_LONG)};
+		const auto value         = parser.get<std::string>(ARG_ROOT_LONG);
+		const auto fn_to_fs_path = [](std::string_view v) { return std::filesystem::path{v}; };
+		const auto view_paths    = split_csv(ctx, value) | std::views::transform(fn_to_fs_path);
+		return {std::pmr::vector<std::filesystem::path>{std::from_range, view_paths, ctx->mem}};
 	}
 	return {};
 }
@@ -91,6 +96,11 @@ auto get_arg(const context* ctx, arg_reinstall, const argparse::ArgumentParser& 
 		return arg_reinstall{ split_csv(ctx, value) };
 	}
 	return {};
+}
+
+[[nodiscard]]
+auto get_arg(const context*, arg_cache_clean, const argparse::ArgumentParser& parser) -> arg_cache_clean {
+    return {parser.get<bool>(ARG_CACHE_CLEAN_LONG)};
 }
 
 [[nodiscard]]
@@ -142,6 +152,12 @@ auto get_args(const context* ctx, int argc, const char* argv[]) -> args {
 		.help(ARG_REINSTALL_HELP)
 		;
 	arg_parser
+		.add_argument(ARG_CACHE_CLEAN_LONG)
+		.default_value(false)
+		.implicit_value(true)
+		.help(ARG_CACHE_CLEAN_HELP)
+		;
+	arg_parser
 		.add_argument(ARG_INSTALL_SELF_SHORT, ARG_INSTALL_SELF_LONG)
 		.default_value(false)
 		.implicit_value(true)
@@ -179,6 +195,7 @@ auto get_args(const context* ctx, int argc, const char* argv[]) -> args {
 		.reacquire   = get_arg(ctx, arg_reacquire{}, arg_parser),
 		.reinstall   = get_arg(ctx, arg_reinstall{}, arg_parser),
 		.track       = get_arg(ctx, arg_track{}, arg_parser),
+		.cache_clean = get_arg(ctx, arg_cache_clean{}, arg_parser),
 		.install_self= get_arg(ctx, arg_install_self{}, arg_parser),
 		.verbose     = get_arg(ctx, arg_verbose{}, arg_parser),
 		.quiet       = get_arg(ctx, arg_quiet{}, arg_parser),

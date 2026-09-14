@@ -18,8 +18,18 @@ auto make_pkg_check_dir_path(const dip::dirs& dirs, std::string_view cfg) -> std
 }
 
 [[nodiscard]]
+auto make_install_path(const dip::dirs& dirs) -> std::filesystem::path {
+	return dirs.root / "install";
+}
+
+[[nodiscard]]
 auto make_install_prefix_path(const dip::dirs& dirs, std::string_view cfg) -> std::filesystem::path {
 	return dirs.root / "install" / cfg;
+}
+
+[[nodiscard]]
+auto make_install_meta_path(const dip::dirs& dirs, std::string_view cfg) -> std::filesystem::path {
+	return dirs.root / "install" / cfg / "meta";
 }
 
 [[nodiscard]]

@@ -24,6 +24,10 @@ struct yml_registry {
 	std::pmr::vector<dip::dep> deps;
 };
 
+struct yml_meta {
+	std::pmr::string version;
+};
+
 [[nodiscard]]
 auto fn_dep_name_is(std::string_view name) {
 	return [name](const dip::dep& dep) { return dep.name == name; };
@@ -279,6 +283,24 @@ auto read_registry_yml(context* ctx, const std::filesystem::path& path) -> yml_r
 	return {};
 }
 
+[[nodiscard]]
+auto read_meta_yml(context* ctx, const std::filesystem::path& path) -> yml_meta {
+	if (std::filesystem::exists(path)) {
+		ctx->log->detail(pmr_format(ctx, "Reading meta info from '{}'", path.string()));
+		if (const auto text = read_file_text(ctx, path)) {
+			const auto node = node_t::deserialize(*text);
+			if (!node.is_mapping())          { throw std::runtime_error{std::format("The meta file must be a mapping, but found '{}'.", fkyaml::to_string(node.get_type()))}; }
+			if (!node.contains(KEY_VERSION)) { throw std::runtime_error{std::format("The meta file must contain a '{}' key.", KEY_VERSION)}; }
+			return yml_meta{
+				.version = to_pmr_string(ctx, node, KEY_VERSION)
+			};
+		}
+		throw std::runtime_error{std::format("Failed to read meta info from '{}'", path.string())};
+	}
+	ctx->log->info(pmr_format(ctx, "No meta file found at '{}'", path.string()));
+	return {};
+}
+
 auto map_origin_into(node_t::mapping_type* mapping, const std::filesystem::path& origin) -> void {
 	(*mapping)[KEY_PATH] = origin.string();
 }
@@ -331,6 +353,18 @@ auto save_to(context* ctx, const yml_registry& registry, const std::filesystem::
 	std::filesystem::rename(tmp_path, path);
 	std::filesystem::remove(tmp_path);
 	ctx->log->detail(pmr_format(ctx, "Saved registry to '{}'", path.string()));
+}
+
+auto save_to(context* ctx, const yml_meta& meta, const std::filesystem::path& path) -> void {
+	auto tmp_path = path;
+	tmp_path.replace_extension(".tmp");
+	auto root = node_t::mapping_type{};
+	root[KEY_VERSION] = meta.version;
+	auto string = node_t::serialize(root);
+	write_text_to_file(tmp_path, string);
+	std::filesystem::rename(tmp_path, path);
+	std::filesystem::remove(tmp_path);
+	ctx->log->detail(pmr_format(ctx, "Saved meta info to '{}'", path.string()));
 }
 
 } // dip
