@@ -42,11 +42,11 @@ auto get_dep(yml_registry* registry, std::string_view name) -> dip::dep* {
 }
 
 [[nodiscard]]
-auto get_position_in_registry(const yml_registry& registry, std::string_view dep_name) -> size_t {
-	if (const auto pos = std::ranges::find_if(registry.deps, fn_dep_name_is(dep_name)); pos != registry.deps.end()) {
-		return std::distance(registry.deps.begin(), pos);
+auto get_dep(const yml_registry& registry, std::string_view name) -> const dip::dep& {
+	if (auto pos = std::ranges::find_if(registry.deps, fn_dep_name_is(name)); pos != std::cend(registry.deps)) {
+		return *pos;
 	}
-	throw std::runtime_error(std::format("Dependency '{}' not found in registry.", dep_name));
+	throw std::runtime_error(std::format("Dependency '{}' not found in registry.", name));
 }
 
 [[nodiscard]]
@@ -329,10 +329,21 @@ auto map_into(node_t::mapping_type* mapping, const dip::origin& origin) -> void 
 	std::visit([mapping](const auto& origin) { map_origin_into(mapping, origin); }, origin);
 }
 
+auto map_package_names_into(node_t::mapping_type* mapping, const std::pmr::vector<std::pmr::string>& package_names) -> void {
+	if (!package_names.empty()) {
+		auto pkg_names_node = node_t::sequence_type{};
+		for (const auto& pkg_name : package_names) {
+			pkg_names_node.push_back(pkg_name);
+		}
+		(*mapping)[KEY_PACKAGE_NAMES] = std::move(pkg_names_node);
+	}
+}
+
 [[nodiscard]]
 auto to_yaml(context* ctx, const dip::dep& dep) -> node_t::mapping_type {
 	auto mapping = node_t::mapping_type{};
 	mapping[KEY_NAME] = dep.name;
+	map_package_names_into(&mapping, dep.package_names);
 	map_into(&mapping, dep.origin);
 	if (!dep.cmake_options.any.empty()) { mapping[KEY_CMAKE_OPTIONS]     = join<std::pmr::string>(ctx, dep.cmake_options.any, " "); }
 	if (!dep.cmake_options.mac.empty()) { mapping[KEY_CMAKE_OPTIONS_MAC] = join<std::pmr::string>(ctx, dep.cmake_options.mac, " "); }

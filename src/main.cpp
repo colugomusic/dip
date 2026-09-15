@@ -35,11 +35,30 @@ struct collected_dep {
 	dip::ancestry ancestry;
 	std::pmr::string version;
 	std::pmr::vector<std::pmr::string> cmake_options;
-	// How deep into the dependency tree is the registry entry?
-	int depth = 0;
+	std::pmr::vector<std::pmr::string> package_names;
+	std::pmr::vector<std::pmr::string> dependencies;
 };
 
 using collected_deps = std::pmr::vector<collected_dep>;
+
+struct commit_update {
+	std::pmr::string name;
+	std::pmr::string new_commit;
+};
+
+struct md5_update {
+	std::pmr::string name;
+	std::pmr::string new_md5;
+};
+
+struct acquire_result {
+	std::optional<md5_update> md5_update;
+};
+
+struct registry_update {
+	std::pmr::vector<commit_update> commit_updates;
+	std::pmr::vector<md5_update> md5_updates;
+};
 
 struct collector_work_to_do {
 	std::pmr::vector<std::pmr::string> deps;
@@ -52,16 +71,22 @@ struct installer_work_to_do {
 	std::pmr::vector<std::pmr::string> reinstall;
 };
 
+struct subcollector_result {
+	std::pmr::vector<std::pmr::string> just_acquired_deps;
+	std::pmr::vector<std::pmr::string> package_names;
+	std::pmr::vector<std::pmr::string> subdeps;
+	dip::collected_deps collected_deps;
+};
+
 struct collector_result {
+	dip::registry_update registry_update;
 	std::pmr::vector<std::pmr::string> just_acquired_deps;
 	dip::collected_deps collected_deps;
 };
 
 struct collector {
 	dip::ancestry ancestry;
-	yml_registry registry;
 	collector_work_to_do work_to_do;
-	collector_result* result = nullptr;
 };
 
 struct installer {
@@ -251,21 +276,12 @@ auto make_ancestry(context* ctx, dip::ancestry parent_ancestry, std::string_view
 }
 
 [[nodiscard]]
-auto sort_deps_into_processing_order(std::pmr::vector<std::pmr::string> list, const yml_registry& registry) -> std::pmr::vector<std::pmr::string> {
-	const auto fn_less = [&registry](const std::pmr::string& a, const std::pmr::string& b) {
-		return get_position_in_registry(registry, a) < get_position_in_registry(registry, b);
-	};
-	std::ranges::sort(list, fn_less);
-	return list;
-}
-
-[[nodiscard]]
 auto get_collector_work_to_do(context* ctx, const yml_registry& registry, const dip::work_requested& work_requested) -> collector_work_to_do {
 	auto track     = expand_track(ctx, registry, work_requested.track);
 	auto reacquire = work_requested.reacquire;
 	auto reinstall = work_requested.reinstall;
 	return collector_work_to_do{
-		.deps          = sort_deps_into_processing_order(get_dep_names(ctx, registry), registry),
+		.deps          = get_dep_names(ctx, registry),
 		.track         = sort_and_remove_duplicates(ctx, track),
 		.reacquire     = sort_and_remove_duplicates(ctx, reacquire),
 	};
@@ -281,13 +297,11 @@ auto get_installer_work_to_do(context* ctx, const yml_project_settings& settings
 }
 
 [[nodiscard]]
-auto init_collector(context* ctx, dip::ancestry ancestry, yml_registry registry, dip::work_requested work_requested, dip::collector_result* result) -> collector {
+auto init_collector(context* ctx, dip::ancestry ancestry, yml_registry registry, dip::work_requested work_requested) -> collector {
 	auto work_to_do = get_collector_work_to_do(ctx, registry, work_requested);
 	return dip::collector{
 		.ancestry   = std::move(ancestry),
-		.registry   = std::move(registry),
 		.work_to_do = std::move(work_to_do),
-		.result     = result
 	};
 }
 
@@ -307,13 +321,6 @@ auto init_state(context* ctx, const dip::args& args, const requirements& reqs, c
 		.project_settings = project_settings,
 		.work_requested   = get_work_requested(args)
 	};
-}
-
-[[nodiscard]]
-auto init_collector_for_dependency_subprocessing(context* ctx, dip::ancestry parent_ancestry, dip::work_requested work_requested, std::string_view dep_name, const std::filesystem::path& registry_path, collector_result* result) -> dip::collector {
-	auto ancestry = make_ancestry(ctx, parent_ancestry, dep_name);
-	auto registry = read_registry_yml(ctx, registry_path);
-	return init_collector(ctx, std::move(ancestry), std::move(registry), std::move(work_requested), result);
 }
 
 [[nodiscard]]
@@ -408,11 +415,6 @@ auto get_package_names_to_search_for(context* ctx, std::string_view dep_name, st
 }
 
 [[nodiscard]]
-auto get_package_names_to_search_for(context* ctx, const dip::dep& dep) -> std::pmr::vector<std::pmr::string> {
-	return get_package_names_to_search_for(ctx, dep.name, dep.package_names);
-}
-
-[[nodiscard]]
 auto make_meta_file_path(const dip::dirs& dirs, const collected_dep& cdep, std::string_view cmake_config) -> std::filesystem::path {
 	const auto meta_dir      = make_install_meta_path(dirs, cmake_config);
 	const auto meta_filename = cdep.dep.name + ".yml";
@@ -434,7 +436,7 @@ auto wrong_version_installed(context* ctx, const dip::dirs& dirs, const collecte
 [[nodiscard]]
 auto to_install(context* ctx, const dip::state& state, const dip::collector_result& collector_result, const dip::installer& installer, const collected_dep& cdep, std::string_view cmake_config) -> bool {
 	return
-		!cmake_packages_can_be_found(ctx, state.dirs, state.prog_paths, get_package_names_to_search_for(ctx, cdep.dep.name, cdep.dep.package_names), cmake_config) ||
+		!cmake_packages_can_be_found(ctx, state.dirs, state.prog_paths, get_package_names_to_search_for(ctx, cdep.dep.name, cdep.package_names), cmake_config) ||
 		wrong_version_installed(ctx, state.dirs, cdep, cmake_config) ||
 		user_requested_reinstall(installer.work_to_do, cdep.dep.name) ||
 		were_any_subdependencies_of_this_installed(&installer, cdep.dep.name) ||
@@ -459,82 +461,92 @@ auto decorate(context* ctx, const dip::collected_dep& cdep) -> std::pmr::string 
 }
 
 [[nodiscard]]
-auto update_track_commit(context* ctx, dip::dep* dep, const dip::state& state, const dip::collector& collector, origin_git_tracked_branch git) -> bool {
-	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep->name), pmr_format(ctx, "Fetching latest commit from '{}'", git.url));
+auto update_track_commit(context* ctx, const dip::dep& dep, const dip::state& state, const dip::collector& collector, const origin_git_tracked_branch& git) -> std::optional<commit_update> {
+	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep.name), pmr_format(ctx, "Fetching latest commit from '{}'", git.url));
 	print_and_clear_log(ctx);
 	const auto new_hash = get_latest_git_commit_hash(ctx, state.prog_paths, git.url, git.branch);
-	ctx->log->detail(pmr_format(ctx, "latest commit is '{}'", new_hash));
+	ctx->log->detail(pmr_format(ctx, "Latest commit is '{}'", new_hash));
 	if (new_hash != git.commit) {
-		git.commit = new_hash;
-		dep->origin = git;
-		ctx->log->dep_task(decorate(ctx, collector.ancestry, dep->name), pmr_format(ctx, "Updated commit to '{}'", git.commit));
-		return true;
+		ctx->log->dep_task(decorate(ctx, collector.ancestry, dep.name), pmr_format(ctx, "Updating commit to '{}'", git.commit));
+		return commit_update{.name = dep.name, .new_commit = new_hash};
 	}
 	ctx->log->detail("commit is already at latest");
-	return false;
+	return std::nullopt;
 }
 
-auto update_track_commit(context* ctx, dip::dep* dep, const dip::state& state, const dip::collector& collector) -> bool {
-	assert (std::holds_alternative<origin_git_tracked_branch>(dep->origin));
-	return update_track_commit(ctx, dep, state, collector, std::get<origin_git_tracked_branch>(dep->origin));
+[[nodiscard]]
+auto update_track_commit(context* ctx, const dip::dep& dep, const dip::state& state, const dip::collector& collector) -> std::optional<commit_update> {
+	assert (std::holds_alternative<origin_git_tracked_branch>(dep.origin));
+	return update_track_commit(ctx, dep, state, collector, std::get<origin_git_tracked_branch>(dep.origin));
 }
 
-auto extract_to(context* ctx, const dip::state& state, const dip::collector& collector, const dip::dep& dep, const std::filesystem::path& archive_path, const std::filesystem::path& dest_dir_path) -> void {
-	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep.name), pmr_format(ctx, "Extracting '{}'", archive_path.filename().string()));
+auto extract_to(context* ctx, const dip::state& state, const dip::collector& collector, std::string_view dep_name, const std::filesystem::path& archive_path, const std::filesystem::path& dest_dir_path) -> void {
+	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep_name), pmr_format(ctx, "Extracting '{}'", archive_path.filename().string()));
 	print_and_clear_log(ctx);
 	extract_to(ctx, state.prog_paths, archive_path, dest_dir_path);
 }
 
-auto md5_check_or_update(context* ctx, dip::dep* dep, const std::filesystem::path& file, origin_url origin) -> void {
+[[nodiscard]]
+auto md5_check_or_update(context* ctx, std::string_view dep_name, const std::filesystem::path& file, origin_url origin) -> std::optional<md5_update> {
 	const auto md5 = calc_md5(ctx, file);
 	if (origin.md5.empty()) {
-		origin.md5 = md5;
-		dep->origin = origin;
+		return md5_update{.name = to_string(ctx, dep_name), .new_md5 = md5};
 	}
-	else {
-		if (md5 != origin.md5) {
-			throw std::runtime_error(std::format("MD5 mismatch for downloaded file '{}'. Expected '{}', got '{}'", file.string(), origin.md5, md5));
-		}
+	if (md5 != origin.md5) {
+		throw std::runtime_error(std::format("MD5 mismatch for downloaded file '{}'. Expected '{}', got '{}'", file.string(), origin.md5, md5));
 	}
+	return std::nullopt;
 }
 
-auto acquire_src_from_origin(context* ctx, dip::dep* dep, const dip::state& state, const dip::collector& collector, std::string_view version, const std::filesystem::path& origin) -> void {
+[[nodiscard]]
+auto acquire_src_from_origin(context* ctx, const dip::state& state, const dip::collector& collector, std::string_view dep_name, std::string_view version, const std::filesystem::path& origin) -> acquire_result {
 	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, version);
-	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep->name), pmr_format(ctx, "Copying source code from '{}'", origin.string()));
+	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep_name), pmr_format(ctx, "Copying source code from '{}'", origin.string()));
 	print_and_clear_log(ctx);
 	const auto copy_options =
 		std::filesystem::copy_options::recursive |
 		std::filesystem::copy_options::overwrite_existing;
 	std::filesystem::create_directories(src_dir_path);
 	std::filesystem::copy(origin, src_dir_path, copy_options);
+	return {};
 }
 
-auto acquire_src_from_origin(context* ctx, dip::dep* dep, const dip::state& state, const dip::collector& collector, std::string_view version, const origin_git_repo& origin) -> void {
-	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep->name), pmr_format(ctx, "Cloning git repo '{} # {}'", origin.url, origin.commit));
+[[nodiscard]]
+auto acquire_src_from_origin(context* ctx, const dip::state& state, const dip::collector& collector, std::string_view dep_name, std::string_view version, const origin_git_repo& origin) -> acquire_result {
+	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep_name), pmr_format(ctx, "Cloning git repo '{} # {}'", origin.url, origin.commit));
 	print_and_clear_log(ctx);
 	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, version);
 	git_clone(ctx, state.prog_paths, origin.url, origin.commit, src_dir_path);
+	return {};
 }
 
-auto acquire_src_from_origin(context* ctx, dip::dep* dep, const dip::state& state, const dip::collector& collector, std::string_view version, const origin_git_tracked_branch& origin) -> void {
-	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep->name), pmr_format(ctx, "Cloning git repo '{} # {}'", origin.url, origin.commit));
+[[nodiscard]]
+auto acquire_src_from_origin(context* ctx, const dip::state& state, const dip::collector& collector, std::string_view dep_name, std::string_view version, const origin_git_tracked_branch& origin) -> acquire_result {
+	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep_name), pmr_format(ctx, "Cloning git repo '{} # {}'", origin.url, origin.commit));
 	print_and_clear_log(ctx);
 	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, version);
 	git_clone(ctx, state.prog_paths, origin.url, origin.commit, src_dir_path);
+	return {};
 }
 
-auto acquire_src_from_origin(context* ctx, dip::dep* dep, const dip::state& state, const dip::collector& collector, std::string_view version, const origin_url& origin) -> void {
-	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep->name), pmr_format(ctx, "Downloading source code from '{}'", origin.url));
+[[nodiscard]]
+auto acquire_src_from_origin(context* ctx, const dip::state& state, const dip::collector& collector, std::string_view dep_name, std::string_view version, const origin_url& origin) -> acquire_result {
+	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep_name), pmr_format(ctx, "Downloading source code from '{}'", origin.url));
 	print_and_clear_log(ctx);
 	const auto dl_dir_path     = make_dl_dir_path(ctx, state.dirs, version);
 	const auto src_dir_path    = make_src_dir_path(ctx, state.dirs, version);
 	const auto downloaded_file = download_file(ctx, state.prog_paths, origin.url, dl_dir_path);
-	md5_check_or_update(ctx, dep, downloaded_file, origin);
-	extract_to(ctx, state, collector, *dep, downloaded_file, src_dir_path);
+	auto result = acquire_result{};
+	if (auto update = md5_check_or_update(ctx, dep_name, downloaded_file, origin)) {
+		result.md5_update = std::move(*update);
+	}
+	extract_to(ctx, state, collector, dep_name, downloaded_file, src_dir_path);
+	return result;
 }
 
-auto acquire(context* ctx, dip::dep* dep, const dip::state& state, const dip::collector& collector, std::string_view version) -> void {
-	std::visit([ctx, dep, &state, &collector, version](const auto& origin) { acquire_src_from_origin(ctx, dep, state, collector, version, origin); }, dep->origin);
+[[nodiscard]]
+auto acquire(context* ctx, const dip::state& state, const dip::collector& collector, const dip::dep& dep, std::string_view version) -> acquire_result {
+	return std::visit([ctx, &state, &collector, &dep, version](const auto& origin) { return acquire_src_from_origin(ctx, state, collector, dep.name, version, origin); }, dep.origin);
 }
 
 auto configure(context* ctx, const dip::state& state, const dip::collected_dep& cdep, const std::filesystem::path& src_dir_path, const std::filesystem::path& bld_dir_path, std::span<const std::pmr::string> cmake_options_list, std::string_view cmake_config) -> void {
@@ -563,7 +575,7 @@ auto install(context* ctx, const dip::state& state, const dip::collected_dep& cd
 	ctx->log->dep_cfg_task(decorate(ctx, cdep), to_pmr_string(ctx, cmake_config), pmr_format(ctx, "Install"));
 	print_and_clear_log(ctx);
 	cmake_install(ctx, state.prog_paths, bld_dir_path, cmake_config);
-	for (const auto& package_name : get_package_names_to_search_for(ctx, cdep.dep)) {
+	for (const auto& package_name : get_package_names_to_search_for(ctx, cdep.dep.name, cdep.package_names)) {
 		if (!cmake_package_can_be_found(ctx, state.dirs, state.prog_paths, package_name, cmake_config)) {
 			throw std::runtime_error{std::format("CMake could still not find package '{}' after installing it. This is usually an indication that the dependency has a broken CMakeLists.txt.", cdep.dep.name)};
 		}
@@ -579,7 +591,6 @@ auto configure_build_install(context* ctx, const dip::state& state, const dip::c
 	install(ctx, state, cdep, bld_dir_path, cmake_config);
 }
 
-auto run_collector(context* ctx, const dip::state& state, dip::collector* collector, int depth) -> void;
 auto run_installer(context* ctx, const dip::state& state, dip::installer* installer) -> void;
 
 [[nodiscard]]
@@ -595,113 +606,17 @@ auto get_dep_registry_to_use(context* ctx, const std::filesystem::path& dip_dir,
 }
 
 [[nodiscard]]
-auto run_dip_on(context* ctx, const dip::state& state, const dip::collector& collector, dip::dep dep, std::string_view version, const std::pmr::vector<std::pmr::string>& cmake_options, const std::filesystem::path& registry_override, int depth) -> bool {
-	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, version);
-	if (const auto dip_dir = find_dip_dir(ctx, src_dir_path)) {
-		ctx->log->detail(pmr_format(ctx, "Found '{}' directory at '{}'", DIR_PROJECT_DIP, dip_dir->string()));
-		const auto dep_settings  = read_project_settings_yml(ctx, *dip_dir);
-		const auto registry_path = get_dep_registry_to_use(ctx, *dip_dir, registry_override);
-		auto dep_collector       = init_collector_for_dependency_subprocessing(ctx, collector.ancestry, state.work_requested, dep.name, registry_path, collector.result);
-		run_collector(ctx, state, &dep_collector, depth + 1);
-		// If consumer didn't specify package names, use the
-		// package names specified in the dependency settings.
-		if (dep.package_names.empty()) {
-			dep.package_names = dep_settings.package_names;
-		}
-		// Collect self
-		auto self_cdep = collected_dep {
-			.dep           = dep,
-			.ancestry      = collector.ancestry,
-			.version       = to_pmr_string(ctx, version),
-			.cmake_options = cmake_options,
-			.depth         = depth
-		};
-		collector.result->collected_deps.push_back(std::move(self_cdep));
-		save_to(ctx, dep_collector.registry, registry_override);
-		return true;
-	}
-	return false;
-}
-
-[[nodiscard]]
-auto find_collected_dep(const dip::collector& collector, std::string_view name) -> collected_deps::iterator {
-	const auto fn_name_is = [name](const dip::collected_dep& cdep) { return cdep.dep.name == name; };
-	return std::ranges::find_if(collector.result->collected_deps, fn_name_is);
+auto init_collector_result(context* ctx) -> dip::collector_result {
+	return {
+		.just_acquired_deps = std::pmr::vector<std::pmr::string>{ctx->mem},
+		.collected_deps     = dip::collected_deps{ctx->mem}
+	};
 }
 
 [[nodiscard]]
 auto get_parent(context* ctx, const dip::ancestry& ancestry) -> std::pmr::string {
 	if (ancestry.empty()) { return std::pmr::string{ctx->mem}; }
 	else                  { return ancestry.back(); }
-}
-
-auto move_before(dip::collected_deps* list, std::string_view move_this, std::string_view before_this) -> void {
-	const auto fn_is_to_move = [move_this](const dip::collected_dep& cdep) { return cdep.dep.name == move_this; };
-	const auto fn_is_before  = [before_this](const dip::collected_dep& cdep) { return cdep.dep.name == before_this; };
-	if (const auto pos_to_move = std::ranges::find_if(*list, fn_is_to_move); pos_to_move != list->end()) {
-		if (const auto pos_before = std::ranges::find_if(*list, fn_is_before); pos_before != list->end()) {
-			if (pos_before < pos_to_move) {
-				const auto move_cdep = *pos_to_move;
-				list->erase(pos_to_move);
-				list->insert(pos_before, std::move(move_cdep));
-			}
-		}
-	}
-}
-
-auto run_collector(context* ctx, const dip::state& state, dip::collector* collector, std::string_view name, int depth) -> void {
-	ctx->log->detail(pmr_format(ctx, "Collecting dependency '{}'", name));
-	auto existing_cdep = find_collected_dep(*collector, name);
-	if (existing_cdep != collector->result->collected_deps.end()) {
-		ctx->log->detail(pmr_format(ctx, "We already collected a dep for '{}' at depth {}", name, existing_cdep->depth));
-		if (depth >= existing_cdep->depth) {
-			ctx->log->detail(pmr_format(ctx, "Current depth {} is greater than or equal to existing depth {}", depth, existing_cdep->depth));
-			// If we already collected a dep with this name and its depth
-			// is less than our current depth, keep the existing dep but
-			// just move it so that it's processed before the parent of
-			// this one.
-			if (const auto parent_name = get_parent(ctx, collector->ancestry); !parent_name.empty()) {
-				ctx->log->detail(pmr_format(ctx, "Moving '{}' before its parent '{}'", name, parent_name));
-				move_before(&collector->result->collected_deps, name, parent_name);
-			}
-			return;
-		}
-	}
-	auto dep = get_dep(&collector->registry, name);
-	if (to_track(ctx, *collector, *dep)) {
-		update_track_commit(ctx, dep, state, *collector);
-	}
-	const auto cmake_options     = get_cmake_options_list(ctx, os::get_platform(), state.project_settings.cmake_options, dep->cmake_options);
-	const auto version           = make_version_string(ctx, dep->origin, cmake_options);
-	const auto registry_override = make_registry_override_path(state.dirs, version);
-	ctx->log->detail(pmr_format(ctx, "version: '{}'", version));
-	if (to_acquire(ctx, state, *collector, dep->name, version)) {
-		acquire(ctx, dep, state, *collector, version);
-		collector->result->just_acquired_deps.push_back(to_pmr_string(ctx, name));
-		remove_if_exists(registry_override);
-	}
-	if (run_dip_on(ctx, state, *collector, *dep, version, cmake_options, registry_override, depth)) {
-		// If that returned true then the dependency is also using dip to handle its
-		// own dependencies.
-		return;
-	}
-	if (existing_cdep != collector->result->collected_deps.end()) {
-		ctx->log->detail(pmr_format(ctx, "Updating existing collected dep for '{}'", name));
-		existing_cdep->ancestry      = collector->ancestry;
-		existing_cdep->version       = version;
-		existing_cdep->cmake_options = cmake_options;
-		existing_cdep->depth         = depth;
-		return;
-	}
-	ctx->log->detail(pmr_format(ctx, "We haven't seen '{}' yet so creating a new collected dep for it", name));
-	auto cdep = collected_dep {
-		.dep           = *dep,
-		.ancestry      = collector->ancestry,
-		.version       = version,
-		.cmake_options = cmake_options,
-		.depth         = depth
-	};
-	collector->result->collected_deps.push_back(std::move(cdep));
 }
 
 auto install(context* ctx, const dip::state& state, const dip::collector_result& collector_result, dip::installer* installer, const collected_dep& cdep) -> void {
@@ -716,11 +631,122 @@ auto install(context* ctx, const dip::state& state, const dip::collector_result&
 	ctx->log->dep_task(decorate(ctx, cdep), "Ready");
 }
 
-auto run_collector(context* ctx, const dip::state& state, dip::collector* collector, int depth) -> void {
-	for (const auto& name : collector->work_to_do.deps) {
-		print_and_clear_log(ctx);
-		run_collector(ctx, state, collector, name, depth);
+[[nodiscard]] auto run_collector(context* ctx, const dip::state& state, const yml_registry& registry, const dip::collector& collector) -> collector_result;
+
+[[nodiscard]]
+auto set_commit(dip::origin origin, std::string_view new_commit) -> dip::origin {
+	if (const auto git_repo    = std::get_if<origin_git_repo>(&origin))           { git_repo->commit = new_commit; return origin; }
+	if (const auto git_tracked = std::get_if<origin_git_tracked_branch>(&origin)) { git_tracked->commit = new_commit; return origin; }
+	throw std::runtime_error("Cannot set commit for origin that is not a git repository.");
+}
+
+auto apply(yml_registry* registry, const commit_update& update) -> void {
+	auto dep = get_dep(registry, update.name);
+	dep->origin = set_commit(std::move(dep->origin), update.new_commit);
+}
+
+auto apply(yml_registry* registry, const md5_update& update) -> void {
+	auto dep = get_dep(registry, update.name);
+	assert (std::holds_alternative<origin_url>(dep->origin));
+	std::get<origin_url>(dep->origin).md5 = update.new_md5;
+}
+
+auto apply(yml_registry* registry, const registry_update& update) -> void {
+	for (const auto& upd : update.commit_updates) { apply(registry, upd); }
+	for (const auto& upd : update.md5_updates)    { apply(registry, upd); }
+}
+
+auto erase_existing_deps(collector_work_to_do* work_to_do, std::span<const collected_dep> existing_cdeps) -> void {
+	auto fn_is_existing = [&existing_cdeps](std::string_view name) {
+		auto fn_name_is = [name](const collected_dep& cdep) { return cdep.dep.name == name; };
+		return std::ranges::any_of(existing_cdeps, fn_name_is);
+	};
+	auto& list = work_to_do->deps;
+	list.erase(std::remove_if(list.begin(), list.end(), fn_is_existing), list.end());
+}
+
+[[nodiscard]]
+auto subcollect(context* ctx, const dip::state& state, const ancestry& parent_ancestry, std::span<const collected_dep> existing_cdeps, const collected_dep& cdep) -> subcollector_result {
+	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, cdep.version);
+	if (const auto dip_dir = find_dip_dir(ctx, src_dir_path)) {
+		ctx->log->detail(pmr_format(ctx, "Found '{}' directory at '{}'", DIR_PROJECT_DIP, dip_dir->string()));
+		const auto registry_override = make_registry_override_path(state.dirs, cdep.version);
+		const auto dep_settings      = read_project_settings_yml(ctx, *dip_dir);
+		const auto registry_path     = get_dep_registry_to_use(ctx, *dip_dir, registry_override);
+		auto ancestry  = make_ancestry(ctx, parent_ancestry, cdep.dep.name);
+		auto registry  = read_registry_yml(ctx, registry_path);
+		auto collector = init_collector(ctx, std::move(ancestry), registry, state.work_requested);
+		erase_existing_deps(&collector.work_to_do, existing_cdeps);
+		auto collector_result = run_collector(ctx, state, registry, collector);
+		auto subcollector_result = dip::subcollector_result{
+			.just_acquired_deps = std::move(collector_result.just_acquired_deps),
+			// If consumer didn't specify package names, use the
+			// package names specified in the dependency settings.
+			.package_names      = cdep.dep.package_names.empty() ? dep_settings.package_names : cdep.dep.package_names,
+			.subdeps            = get_dep_names(ctx, registry),
+			.collected_deps     = std::move(collector_result.collected_deps),
+		};
+		apply(&registry, collector_result.registry_update);
+		save_to(ctx, registry, registry_override);
+		return subcollector_result;
 	}
+	return {
+		.package_names = cdep.dep.package_names
+	};
+}
+
+[[nodiscard]]
+auto is_dependency_of(const collected_dep& a, const collected_dep& b) -> bool {
+	return std::ranges::find(b.dependencies, a.dep.name) != std::cend(b.dependencies);
+}
+
+[[nodiscard]]
+auto dependency_graph_sort(const collected_dep& a, const collected_dep& b) -> bool {
+	if (is_dependency_of(a, b)) { return true; }
+	if (is_dependency_of(b, a)) { return false; }
+	return a.dep.name < b.dep.name;
+}
+
+[[nodiscard]]
+auto run_collector(context* ctx, const dip::state& state, const yml_registry& registry, const dip::collector& collector) -> collector_result {
+	auto result = collector_result{};
+	for (const auto& name : collector.work_to_do.deps) {
+		ctx->log->detail(pmr_format(ctx, "Collecting dependency '{}'", name));
+		print_and_clear_log(ctx);
+		auto dep = get_dep(registry, name);
+		if (to_track(ctx, collector, dep)) {
+			if (auto update = update_track_commit(ctx, dep, state, collector)) {
+				result.registry_update.commit_updates.push_back(std::move(*update));
+			}
+		}
+		const auto cmake_options     = get_cmake_options_list(ctx, os::get_platform(), state.project_settings.cmake_options, dep.cmake_options);
+		const auto version           = make_version_string(ctx, dep.origin, cmake_options);
+		const auto registry_override = make_registry_override_path(state.dirs, version);
+		ctx->log->detail(pmr_format(ctx, "version: '{}'", version));
+		if (to_acquire(ctx, state, collector, dep.name, version)) {
+			auto acquire_result = acquire(ctx, state, collector, dep, version);
+			if (acquire_result.md5_update) {
+				result.registry_update.md5_updates.push_back(std::move(*acquire_result.md5_update));
+			}
+			result.just_acquired_deps.push_back(to_pmr_string(ctx, name));
+			remove_if_exists(registry_override);
+		}
+		auto cdep = collected_dep {
+			.dep           = dep,
+			.ancestry      = collector.ancestry,
+			.version       = version,
+			.cmake_options = cmake_options,
+		};
+		result.collected_deps.push_back(std::move(cdep));
+	}
+	for (auto& cdep : result.collected_deps) {
+		auto subcollect_result = subcollect(ctx, state, collector.ancestry, result.collected_deps, cdep);
+		cdep.package_names = std::move(subcollect_result.package_names);
+		cdep.dependencies  = std::move(subcollect_result.subdeps);
+		std::ranges::copy(subcollect_result.just_acquired_deps, std::back_inserter(result.just_acquired_deps));
+		std::ranges::copy(subcollect_result.collected_deps, std::back_inserter(result.collected_deps));
+	}
+	return result;
 }
 
 auto run_installer(context* ctx, const dip::state& state, const dip::collector_result& collector_result, dip::installer* installer) -> void {
@@ -735,14 +761,6 @@ auto print_cmake_prefix_help(context* ctx, const dip::dirs& dirs, std::span<cons
 	for (const auto& cmake_config : cmake_configs) {
 		ctx->log->info(pmr_format(ctx, "  For a {} build:\n    -DCMAKE_PREFIX_PATH=\"{}\"\n", cmake_config, make_install_prefix_path(dirs, cmake_config).string()));
 	}
-}
-
-[[nodiscard]]
-auto init_collector_result(context* ctx) -> dip::collector_result {
-	return {
-		.just_acquired_deps = std::pmr::vector<std::pmr::string>{ctx->mem},
-		.collected_deps     = dip::collected_deps{ctx->mem}
-	};
 }
 
 [[nodiscard]]
@@ -838,24 +856,28 @@ auto do_cache_clean(context* ctx, const dip::args& args) -> int {
 }
 
 [[nodiscard]]
-auto do_dip(context* ctx, const dip::args& args, const requirements& reqs) -> int {
-	if (const auto dip_dir = find_dip_dir(ctx, args.project_dir.v)) {
-		const auto no_ancestry   = dip::ancestry{ctx->mem};
-		const auto save_registry = !args.install_self.v;
-		auto state               = init_state(ctx, args, reqs, *dip_dir);
-		auto registry            = get_initial_registry(ctx, state.project_settings, args.project_dir.v, *dip_dir, args.install_self.v);
-		auto collector_result    = init_collector_result(ctx);
-		auto collector           = init_collector(ctx, no_ancestry, registry, state.work_requested, &collector_result);
-		run_collector(ctx, state, &collector, 0);
-		if (save_registry) {
-			save_to(ctx, collector.registry, *dip_dir / FILENAME_REGISTRY_YML);
+auto do_dip(context* ctx, const dip::args& args) -> int {
+	if (const auto reqs = check_requirements(ctx)) {
+		if (const auto dip_dir = find_dip_dir(ctx, args.project_dir.v)) {
+			const auto no_ancestry   = dip::ancestry{ctx->mem};
+			const auto save_registry = !args.install_self.v;
+			auto state               = init_state(ctx, args, *reqs, *dip_dir);
+			auto registry            = get_initial_registry(ctx, state.project_settings, args.project_dir.v, *dip_dir, args.install_self.v);
+			auto collector           = init_collector(ctx, no_ancestry, registry, state.work_requested);
+			auto collector_result    = run_collector(ctx, state, registry, collector);
+			std::ranges::sort(collector_result.collected_deps, dependency_graph_sort);
+			if (save_registry) {
+				apply(&registry, collector_result.registry_update);
+				save_to(ctx, registry, *dip_dir / FILENAME_REGISTRY_YML);
+			}
+			auto installer = init_installer(ctx, state.project_settings, state.work_requested);
+			run_installer(ctx, state, collector_result, &installer);
+			print_cmake_prefix_help(ctx, state.dirs, installer.work_to_do.cmake_configs);
+			return exit_success(ctx);
 		}
-		auto installer = init_installer(ctx, state.project_settings, state.work_requested);
-		run_installer(ctx, state, collector_result, &installer);
-		print_cmake_prefix_help(ctx, state.dirs, installer.work_to_do.cmake_configs);
-		return exit_success(ctx);
+		ctx->log->error(pmr_format(ctx, "No '{}' directory found in project directory '{}'", DIR_PROJECT_DIP, args.project_dir.v.string()));
+		return exit_failure(ctx);
 	}
-	ctx->log->error(pmr_format(ctx, "No '{}' directory found in project directory '{}'", DIR_PROJECT_DIP, args.project_dir.v.string()));
 	return exit_failure(ctx);
 }
 
@@ -864,10 +886,8 @@ auto happy_path(context* ctx, int argc, const char* argv[]) -> int {
 	os::enable_ansi_colors();
 	const auto args    = get_args(ctx, argc, argv);
 	ctx->print_options = make_print_options(args);
-	if (const auto reqs = check_requirements(ctx)) {
-		if (args.cache_clean.v) { return do_cache_clean(ctx, args); }
-		else                    { return do_dip(ctx, args, *reqs); }
-	}
+	if (args.cache_clean.v) { return do_cache_clean(ctx, args); }
+	else                    { return do_dip(ctx, args); }
 	return exit_failure(ctx);
 }
 
