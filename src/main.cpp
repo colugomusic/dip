@@ -28,6 +28,7 @@ struct work_requested {
 	std::pmr::vector<std::pmr::string> track;
 	std::pmr::vector<std::pmr::string> reacquire;
 	std::pmr::vector<std::pmr::string> reinstall;
+	bool full_package_check = false;
 };
 
 struct collected_dep {
@@ -252,10 +253,11 @@ auto get_dirs(context* ctx, const dip::args& args, std::string_view project_name
 
 auto get_work_requested(const dip::args& args) -> dip::work_requested {
 	return dip::work_requested{
-		.cfg          = args.cfg.v,
-		.track        = args.track.v,
-		.reacquire    = args.reacquire.v,
-		.reinstall    = args.reinstall.v,
+		.cfg                = args.cfg.v,
+		.track              = args.track.v,
+		.reacquire          = args.reacquire.v,
+		.reinstall          = args.reinstall.v,
+		.full_package_check = args.check.v
 	};
 }
 
@@ -435,8 +437,12 @@ auto wrong_version_installed(context* ctx, const dip::dirs& dirs, const collecte
 
 [[nodiscard]]
 auto to_install(context* ctx, const dip::state& state, const dip::collector_result& collector_result, const dip::installer& installer, const collected_dep& cdep, std::string_view cmake_config) -> bool {
+	if (state.work_requested.full_package_check) {
+		if (!cmake_packages_can_be_found(ctx, state.dirs, state.prog_paths, get_package_names_to_search_for(ctx, cdep.dep.name, cdep.package_names), cmake_config)) {
+			return true;
+		}
+	}
 	return
-		!cmake_packages_can_be_found(ctx, state.dirs, state.prog_paths, get_package_names_to_search_for(ctx, cdep.dep.name, cdep.package_names), cmake_config) ||
 		wrong_version_installed(ctx, state.dirs, cdep, cmake_config) ||
 		user_requested_reinstall(installer.work_to_do, cdep.dep.name) ||
 		were_any_subdependencies_of_this_installed(&installer, cdep.dep.name) ||
@@ -792,10 +798,12 @@ auto get_initial_registry(context* ctx, const yml_project_settings& settings, co
 [[nodiscard]]
 auto get_all_dep_versions_in_meta_dir(context* ctx, const std::filesystem::path& meta_dir) -> std::pmr::vector<std::pmr::string> {
 	auto list = std::pmr::vector<std::pmr::string>{ctx->mem};
-	for (const auto& entry : std::filesystem::directory_iterator{meta_dir}) {
-		if (entry.is_regular_file()) {
-			const auto meta = read_meta_yml(ctx, entry.path());
-			list.push_back(meta.version);
+	if (std::filesystem::exists(meta_dir)) {
+		for (const auto& entry : std::filesystem::directory_iterator{meta_dir}) {
+			if (entry.is_regular_file()) {
+				const auto meta = read_meta_yml(ctx, entry.path());
+				list.push_back(meta.version);
+			}
 		}
 	}
 	return list;
@@ -804,11 +812,13 @@ auto get_all_dep_versions_in_meta_dir(context* ctx, const std::filesystem::path&
 [[nodiscard]]
 auto get_all_dep_versions_in_install_dir(context* ctx, const std::filesystem::path& install_dir) -> std::pmr::vector<std::pmr::string> {
 	auto list = std::pmr::vector<std::pmr::string>{ctx->mem};
-	for (const auto& entry : std::filesystem::directory_iterator{install_dir}) {
-		if (entry.is_directory()) {
-			const auto cmake_config = to_string(ctx, entry.path().filename());
-			const auto meta_dir     = entry.path() / "meta";
-			list.append_range(get_all_dep_versions_in_meta_dir(ctx, meta_dir));
+	if (std::filesystem::exists(install_dir)) {
+		for (const auto& entry : std::filesystem::directory_iterator{install_dir}) {
+			if (entry.is_directory()) {
+				const auto cmake_config = to_string(ctx, entry.path().filename());
+				const auto meta_dir     = entry.path() / "meta";
+				list.append_range(get_all_dep_versions_in_meta_dir(ctx, meta_dir));
+			}
 		}
 	}
 	return list;
@@ -817,11 +827,13 @@ auto get_all_dep_versions_in_install_dir(context* ctx, const std::filesystem::pa
 [[nodiscard]]
 auto get_root_installed_versions(context* ctx, const std::filesystem::path& root) -> std::pmr::vector<std::pmr::string> {
 	auto list = std::pmr::vector<std::pmr::string>{ctx->mem};
-	for (const auto& entry : std::filesystem::directory_iterator{root}) {
-		if (entry.is_directory()) {
-			const auto project_name = to_string(ctx, entry.path().filename());
-			const auto install_dir  = entry.path() / "install";
-			list.append_range(get_all_dep_versions_in_install_dir(ctx, install_dir));
+	if (std::filesystem::exists(root)) {
+		for (const auto& entry : std::filesystem::directory_iterator{root}) {
+			if (entry.is_directory()) {
+				const auto project_name = to_string(ctx, entry.path().filename());
+				const auto install_dir  = entry.path() / "install";
+				list.append_range(get_all_dep_versions_in_install_dir(ctx, install_dir));
+			}
 		}
 	}
 	return list;

@@ -1239,6 +1239,10 @@ public:
       }
     }
 
+    // DIP HACK: I don't want to print anything else.
+    stream << "\n";
+    return stream;
+
     // print nargs spec
     if (!argument.m_help.empty()) {
       stream << " ";
