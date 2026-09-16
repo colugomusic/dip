@@ -810,7 +810,7 @@ auto get_all_dep_versions_in_install_dir(context* ctx, const std::filesystem::pa
 			if (entry.is_directory()) {
 				const auto cmake_config = to_string(ctx, entry.path().filename());
 				const auto meta_dir     = entry.path() / "meta";
-				list.append_range(get_all_dep_versions_in_meta_dir(ctx, meta_dir));
+				std::ranges::copy(get_all_dep_versions_in_meta_dir(ctx, meta_dir), std::back_inserter(list));
 			}
 		}
 	}
@@ -825,7 +825,7 @@ auto get_root_installed_versions(context* ctx, const std::filesystem::path& root
 			if (entry.is_directory()) {
 				const auto project_name = to_string(ctx, entry.path().filename());
 				const auto install_dir  = entry.path() / "install";
-				list.append_range(get_all_dep_versions_in_install_dir(ctx, install_dir));
+				std::ranges::copy(get_all_dep_versions_in_install_dir(ctx, install_dir), std::back_inserter(list));
 			}
 		}
 	}
