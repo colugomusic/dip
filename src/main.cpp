@@ -92,10 +92,8 @@ struct collector {
 
 struct installer {
 	installer_work_to_do work_to_do;
-	// Dependencies in this list will be re-installed
-	// because at least one of their sub-dependencies
-	// was installed.
-	std::pmr::vector<std::pmr::string> at_least_one_dep_was_installed_for_this_parent;
+	// List of deps that were just installed by this installer.
+	std::pmr::vector<std::pmr::string> install_log;
 };
 
 struct state {
@@ -372,17 +370,10 @@ auto have_source_code(context* ctx, const dip::state& state, std::string_view de
 	return cmakelists_path.has_value();
 }
 
-auto remember_that_a_subdependency_of_this_was_installed(context* ctx, dip::installer* installer, std::string_view parent_name) -> void {
-	auto list = &installer->at_least_one_dep_was_installed_for_this_parent;
-	if (const auto pos = std::ranges::find(*list, parent_name); pos == list->end()) {
-		list->push_back(to_pmr_string(ctx, parent_name));
-	}
-}
-
 [[nodiscard]]
-auto were_any_subdependencies_of_this_installed(const dip::installer* installer, std::string_view parent_name) -> bool {
-	const auto& list = installer->at_least_one_dep_was_installed_for_this_parent;
-	return std::ranges::find(list, parent_name) != list.end();
+auto were_any_subdependencies_of_this_installed(const dip::installer& installer, const collected_dep& cdep) -> bool {
+	const auto fn_was_just_installed = [&installer](std::string_view name) -> bool { return std::ranges::find(installer.install_log, name) != std::cend(installer.install_log); };
+	return std::ranges::any_of(cdep.dependencies, fn_was_just_installed);
 }
 
 [[nodiscard]]
@@ -445,7 +436,7 @@ auto to_install(context* ctx, const dip::state& state, const dip::collector_resu
 	return
 		wrong_version_installed(ctx, state.dirs, cdep, cmake_config) ||
 		user_requested_reinstall(installer.work_to_do, cdep.dep.name) ||
-		were_any_subdependencies_of_this_installed(&installer, cdep.dep.name) ||
+		were_any_subdependencies_of_this_installed(installer, cdep) ||
 		was_this_just_acquired(collector_result, cdep.dep.name);
 }
 
@@ -629,9 +620,7 @@ auto install(context* ctx, const dip::state& state, const dip::collector_result&
 	for (const auto cmake_config : installer->work_to_do.cmake_configs) {
 		if (to_install(ctx, state, collector_result, *installer, cdep, cmake_config)) {
 			configure_build_install(ctx, state, cdep, cmake_config);
-			if (const auto parent = get_parent(ctx, cdep.ancestry); !parent.empty()) {
-				remember_that_a_subdependency_of_this_was_installed(ctx, installer, parent);
-			}
+			installer->install_log.push_back(cdep.dep.name);
 		}
 	}
 	ctx->log->dep_task(decorate(ctx, cdep), "Ready");
@@ -646,9 +635,12 @@ auto set_commit(dip::origin origin, std::string_view new_commit) -> dip::origin 
 	throw std::runtime_error("Cannot set commit for origin that is not a git repository.");
 }
 
-auto apply(yml_registry* registry, const commit_update& update) -> void {
-	auto dep = get_dep(registry, update.name);
+auto apply(dip::dep* dep, const commit_update& update) -> void {
 	dep->origin = set_commit(std::move(dep->origin), update.new_commit);
+}
+
+auto apply(yml_registry* registry, const commit_update& update) -> void {
+	apply(get_dep(registry, update.name), update);
 }
 
 auto apply(yml_registry* registry, const md5_update& update) -> void {
@@ -722,6 +714,7 @@ auto run_collector(context* ctx, const dip::state& state, const yml_registry& re
 		auto dep = get_dep(registry, name);
 		if (to_track(ctx, collector, dep)) {
 			if (auto update = update_track_commit(ctx, dep, state, collector)) {
+				apply(&dep, *update);
 				result.registry_update.commit_updates.push_back(std::move(*update));
 			}
 		}
