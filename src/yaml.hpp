@@ -297,7 +297,7 @@ auto read_meta_yml(context* ctx, const std::filesystem::path& path) -> yml_meta 
 		}
 		throw std::runtime_error{std::format("Failed to read meta info from '{}'", path.string())};
 	}
-	ctx->log->info(pmr_format(ctx, "No meta file found at '{}'", path.string()));
+	ctx->log->detail(pmr_format(ctx, "No meta file found at '{}'", path.string()));
 	return {};
 }
 
