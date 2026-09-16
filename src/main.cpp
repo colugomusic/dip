@@ -838,7 +838,9 @@ auto get_versions_to_preserve(context* ctx, std::span<const std::filesystem::pat
 	auto view = roots_to_preserve
 		| std::views::transform(fn_get_root_versions)
 		| std::views::join;
-	return sort_and_remove_duplicates(ctx, std::pmr::vector<std::pmr::string>{std::from_range, view, ctx->mem});
+	auto list = std::pmr::vector<std::pmr::string>{ctx->mem};
+	std::ranges::copy(view, std::back_inserter(list));
+	return sort_and_remove_duplicates(ctx, list);
 }
 
 [[nodiscard]]

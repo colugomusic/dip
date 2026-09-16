@@ -53,7 +53,9 @@ auto get_arg(const context* ctx, arg_root, const argparse::ArgumentParser& parse
 		const auto value         = parser.get<std::string>(ARG_ROOT_LONG);
 		const auto fn_to_fs_path = [](std::string_view v) { return std::filesystem::path{v}; };
 		const auto view_paths    = split_csv(ctx, value) | std::views::transform(fn_to_fs_path);
-		return {std::pmr::vector<std::filesystem::path>{std::from_range, view_paths, ctx->mem}};
+		auto list = std::pmr::vector<std::filesystem::path>{ctx->mem};
+		std::ranges::copy(view_paths, std::back_inserter(list));
+		return {list};
 	}
 	return {};
 }
