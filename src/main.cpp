@@ -53,7 +53,7 @@ struct md5_update {
 };
 
 struct acquire_result {
-	std::optional<md5_update> md5_update;
+	std::optional<dip::md5_update> md5_update;
 };
 
 struct registry_update {
