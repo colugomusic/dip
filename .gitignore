@@ -1,2 +1,3 @@
 .clangd
 neovim.json
+*.json
