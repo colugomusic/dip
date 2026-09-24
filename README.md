@@ -1,0 +1,1 @@
+Not a package manager. Completely solves the problem of dependency management in C++ projects. Supersedes [my old python script](https://github.com/colugomusic/dope). I will write documentation and create a youtube demo at some point i'm just a bit busy.
