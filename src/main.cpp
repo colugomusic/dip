@@ -751,8 +751,9 @@ auto run_collector(context* ctx, const dip::state& state, const yml_registry& re
 		auto subcollect_result = subcollect(ctx, state, collector.ancestry, result.collected_deps, cdep);
 		cdep.package_names = std::move(subcollect_result.package_names);
 		cdep.dependencies  = std::move(subcollect_result.subdeps);
+		auto fn_update_position = [&position_in_registry](collected_dep subc) { subc.position_in_registry = position_in_registry++; return subc; };
 		std::ranges::copy(subcollect_result.just_acquired_deps, std::back_inserter(result.just_acquired_deps));
-		std::ranges::copy(subcollect_result.collected_deps, std::back_inserter(result.collected_deps));
+		std::ranges::transform(subcollect_result.collected_deps, std::back_inserter(result.collected_deps), fn_update_position);
 	}
 	return result;
 }
