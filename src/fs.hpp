@@ -45,6 +45,9 @@ auto read_file_text(context* ctx, const std::filesystem::path& path) -> std::opt
 }
 
 auto write_text_to_file(const std::filesystem::path& path, std::string_view text) -> void {
+	if (!std::filesystem::exists(path.parent_path())) {
+		std::filesystem::create_directories(path.parent_path());
+	}
 	auto file = std::ofstream{path};
 	if (!file.is_open()) {
 		throw std::runtime_error{std::format("Failed to open file at '{}'", path.string())};
