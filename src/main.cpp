@@ -701,12 +701,18 @@ auto is_dependency_of(const collected_dep& a, const collected_dep& b) -> bool {
 }
 
 [[nodiscard]]
-auto dependency_graph_sort(const collected_dep& a, const collected_dep& b) -> bool {
-	if (is_dependency_of(a, b)) { return true; }
-	if (is_dependency_of(b, a)) { return false; }
-	if (a.position_in_registry < b.position_in_registry) { return true; }
-	if (a.position_in_registry > b.position_in_registry) { return false; }
-	return a.dep.name < b.dep.name;
+auto fn_dependency_graph_sort(context* ctx) {
+	return [ctx](const collected_dep& a, const collected_dep& b) -> bool {
+		if (is_dependency_of(a, b)) { return true; }
+		if (is_dependency_of(b, a)) { return false; }
+		const auto parent_a = get_parent(ctx, a.ancestry);
+		const auto parent_b = get_parent(ctx, b.ancestry);
+		if (parent_a < parent_b) { return true; }
+		if (parent_a > parent_b) { return false; }
+		if (a.position_in_registry < b.position_in_registry) { return true; }
+		if (a.position_in_registry > b.position_in_registry) { return false; }
+		return a.dep.name < b.dep.name;
+	};
 }
 
 [[nodiscard]]
@@ -751,9 +757,8 @@ auto run_collector(context* ctx, const dip::state& state, const yml_registry& re
 		auto subcollect_result = subcollect(ctx, state, collector.ancestry, result.collected_deps, cdep);
 		cdep.package_names = std::move(subcollect_result.package_names);
 		cdep.dependencies  = std::move(subcollect_result.subdeps);
-		auto fn_update_position = [&position_in_registry](collected_dep subc) { subc.position_in_registry = position_in_registry++; return subc; };
 		std::ranges::copy(subcollect_result.just_acquired_deps, std::back_inserter(result.just_acquired_deps));
-		std::ranges::transform(subcollect_result.collected_deps, std::back_inserter(result.collected_deps), fn_update_position);
+		std::ranges::copy(subcollect_result.collected_deps, std::back_inserter(result.collected_deps));
 	}
 	return result;
 }
@@ -894,7 +899,7 @@ auto do_dip(context* ctx, const dip::args& args) -> int {
 			auto registry            = get_initial_registry(ctx, state.project_settings, args.project_dir.v, *dip_dir, args.install_self.v);
 			auto collector           = init_collector(ctx, no_ancestry, registry, state.work_requested);
 			auto collector_result    = run_collector(ctx, state, registry, collector);
-			std::ranges::sort(collector_result.collected_deps, dependency_graph_sort);
+			std::ranges::sort(collector_result.collected_deps, fn_dependency_graph_sort(ctx));
 			if (save_registry) {
 				apply(&registry, collector_result.registry_update);
 				save_to(ctx, registry, *dip_dir / FILENAME_REGISTRY_YML);
