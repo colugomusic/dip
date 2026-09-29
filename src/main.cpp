@@ -34,7 +34,8 @@ struct work_requested {
 struct collected_dep {
 	dip::dep dep;
 	dip::ancestry ancestry;
-	std::pmr::string version;
+	std::pmr::string src_version;
+	std::pmr::string bld_version;
 	std::pmr::vector<std::pmr::string> cmake_options;
 	std::pmr::vector<std::pmr::string> package_names;
 	std::pmr::vector<std::pmr::string> dependencies;
@@ -358,8 +359,8 @@ auto user_requested_track(context*, const dip::collector_work_to_do& work_to_do,
 }
 
 [[nodiscard]]
-auto have_source_code(context* ctx, const dip::state& state, std::string_view dep_name, std::string_view version) -> bool {
-	const auto src_dir_path    = make_src_dir_path(ctx, state.dirs, version);
+auto have_source_code(context* ctx, const dip::state& state, std::string_view dep_name, std::string_view src_version) -> bool {
+	const auto src_dir_path    = make_src_dir_path(ctx, state.dirs, src_version);
 	const auto cmakelists_path = find_file_in_dir(ctx, src_dir_path, "CMakeLists.txt");
 	if (cmakelists_path) {
 		ctx->log->detail(pmr_format(ctx, "Found CMakeLists.txt for '{}' at '{}'", dep_name, cmakelists_path->string()));
@@ -390,9 +391,9 @@ auto to_track(context* ctx, const dip::collector& collector, const dip::dep& dep
 }
 
 [[nodiscard]]
-auto to_acquire(context* ctx, const dip::state& state, const dip::collector& collector, std::string_view dep_name, std::string_view version) -> bool {
+auto to_acquire(context* ctx, const dip::state& state, const dip::collector& collector, std::string_view dep_name, std::string_view src_version) -> bool {
 	return
-		!have_source_code(ctx, state, dep_name, version) ||
+		!have_source_code(ctx, state, dep_name, src_version) ||
 		user_requested_reacquire(collector.work_to_do, dep_name);
 }
 
@@ -419,8 +420,8 @@ auto make_meta_file_path(const dip::dirs& dirs, const collected_dep& cdep, std::
 auto wrong_version_installed(context* ctx, const dip::dirs& dirs, const collected_dep& cdep, std::string_view cmake_config) -> bool {
 	const auto meta_file_path = make_meta_file_path(dirs, cdep, cmake_config);
 	const auto meta           = read_meta_yml(ctx, meta_file_path);
-	if (meta.version != cdep.version) {
-		ctx->log->detail(pmr_format(ctx, "Installed version '{}' does not match required version '{}'", meta.version, cdep.version));
+	if (meta.bld_version != cdep.bld_version) {
+		ctx->log->detail(pmr_format(ctx, "Installed version '{}' does not match required version '{}'", meta.bld_version, cdep.bld_version));
 		return true;
 	}
 	return false;
@@ -496,8 +497,8 @@ auto md5_check_or_update(context* ctx, std::string_view dep_name, const std::fil
 }
 
 [[nodiscard]]
-auto acquire_src_from_origin(context* ctx, const dip::state& state, const dip::collector& collector, std::string_view dep_name, std::string_view version, const std::filesystem::path& origin) -> acquire_result {
-	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, version);
+auto acquire_src_from_origin(context* ctx, const dip::state& state, const dip::collector& collector, std::string_view dep_name, std::string_view src_version, const std::filesystem::path& origin) -> acquire_result {
+	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, src_version);
 	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep_name), pmr_format(ctx, "Copying source code from '{}'", origin.string()));
 	print_and_clear_log(ctx);
 	const auto copy_options =
@@ -509,29 +510,29 @@ auto acquire_src_from_origin(context* ctx, const dip::state& state, const dip::c
 }
 
 [[nodiscard]]
-auto acquire_src_from_origin(context* ctx, const dip::state& state, const dip::collector& collector, std::string_view dep_name, std::string_view version, const origin_git_repo& origin) -> acquire_result {
+auto acquire_src_from_origin(context* ctx, const dip::state& state, const dip::collector& collector, std::string_view dep_name, std::string_view src_version, const origin_git_repo& origin) -> acquire_result {
 	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep_name), pmr_format(ctx, "Cloning git repo '{} # {}'", origin.url, origin.commit));
 	print_and_clear_log(ctx);
-	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, version);
+	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, src_version);
 	git_clone(ctx, state.prog_paths, origin.url, origin.commit, src_dir_path);
 	return {};
 }
 
 [[nodiscard]]
-auto acquire_src_from_origin(context* ctx, const dip::state& state, const dip::collector& collector, std::string_view dep_name, std::string_view version, const origin_git_tracked_branch& origin) -> acquire_result {
+auto acquire_src_from_origin(context* ctx, const dip::state& state, const dip::collector& collector, std::string_view dep_name, std::string_view src_version, const origin_git_tracked_branch& origin) -> acquire_result {
 	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep_name), pmr_format(ctx, "Cloning git repo '{} # {}'", origin.url, origin.commit));
 	print_and_clear_log(ctx);
-	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, version);
+	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, src_version);
 	git_clone(ctx, state.prog_paths, origin.url, origin.commit, src_dir_path);
 	return {};
 }
 
 [[nodiscard]]
-auto acquire_src_from_origin(context* ctx, const dip::state& state, const dip::collector& collector, std::string_view dep_name, std::string_view version, const origin_url& origin) -> acquire_result {
+auto acquire_src_from_origin(context* ctx, const dip::state& state, const dip::collector& collector, std::string_view dep_name, std::string_view src_version, const origin_url& origin) -> acquire_result {
 	ctx->log->dep_task(decorate(ctx, collector.ancestry, dep_name), pmr_format(ctx, "Downloading source code from '{}'", origin.url));
 	print_and_clear_log(ctx);
-	const auto dl_dir_path     = make_dl_dir_path(ctx, state.dirs, version);
-	const auto src_dir_path    = make_src_dir_path(ctx, state.dirs, version);
+	const auto dl_dir_path     = make_dl_dir_path(ctx, state.dirs, src_version);
+	const auto src_dir_path    = make_src_dir_path(ctx, state.dirs, src_version);
 	const auto downloaded_file = download_file(ctx, state.prog_paths, origin.url, dl_dir_path);
 	auto result = acquire_result{};
 	if (auto update = md5_check_or_update(ctx, dep_name, downloaded_file, origin)) {
@@ -542,8 +543,8 @@ auto acquire_src_from_origin(context* ctx, const dip::state& state, const dip::c
 }
 
 [[nodiscard]]
-auto acquire(context* ctx, const dip::state& state, const dip::collector& collector, const dip::dep& dep, std::string_view version) -> acquire_result {
-	return std::visit([ctx, &state, &collector, &dep, version](const auto& origin) { return acquire_src_from_origin(ctx, state, collector, dep.name, version, origin); }, dep.origin);
+auto acquire(context* ctx, const dip::state& state, const dip::collector& collector, const dip::dep& dep, std::string_view src_version) -> acquire_result {
+	return std::visit([ctx, &state, &collector, &dep, src_version](const auto& origin) { return acquire_src_from_origin(ctx, state, collector, dep.name, src_version, origin); }, dep.origin);
 }
 
 auto configure(context* ctx, const dip::state& state, const dip::collected_dep& cdep, const std::filesystem::path& src_dir_path, const std::filesystem::path& bld_dir_path, std::span<const std::pmr::string> cmake_options_list, std::string_view cmake_config) -> void {
@@ -565,7 +566,7 @@ auto build(context* ctx, const dip::state& state, const dip::collected_dep& cdep
 }
 
 auto write_successful_install_meta_file(context* ctx, const dip::dirs& dirs, const dip::collected_dep& cdep, std::string_view cmake_config) -> void {
-	save_to(ctx, yml_meta{.version = cdep.version}, make_meta_file_path(dirs, cdep, cmake_config));
+	save_to(ctx, yml_meta{.src_version = cdep.src_version, .bld_version = cdep.bld_version}, make_meta_file_path(dirs, cdep, cmake_config));
 }
 
 auto install(context* ctx, const dip::state& state, const dip::collected_dep& cdep, const std::filesystem::path& bld_dir_path, std::string_view cmake_config) -> void {
@@ -581,8 +582,8 @@ auto install(context* ctx, const dip::state& state, const dip::collected_dep& cd
 }
 
 auto configure_build_install(context* ctx, const dip::state& state, const dip::collected_dep& cdep, std::string_view cmake_config) -> void {
-	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, cdep.version);
-	const auto bld_dir_path = make_bld_dir_path(ctx, state.dirs, cdep.version, cmake_config);
+	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, cdep.src_version);
+	const auto bld_dir_path = make_bld_dir_path(ctx, state.dirs, cdep.bld_version, cmake_config);
 	configure(ctx, state, cdep, src_dir_path, bld_dir_path, cdep.cmake_options, cmake_config);
 	build(ctx, state, cdep, bld_dir_path, cmake_config);
 	install(ctx, state, cdep, bld_dir_path, cmake_config);
@@ -665,10 +666,10 @@ auto erase_existing_deps(collector_work_to_do* work_to_do, std::span<const colle
 
 [[nodiscard]]
 auto subcollect(context* ctx, const dip::state& state, const ancestry& parent_ancestry, std::span<const collected_dep> existing_cdeps, const collected_dep& cdep) -> subcollector_result {
-	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, cdep.version);
+	const auto src_dir_path = make_src_dir_path(ctx, state.dirs, cdep.src_version);
 	if (const auto dip_dir = find_dip_dir(ctx, src_dir_path)) {
 		ctx->log->detail(pmr_format(ctx, "Found '{}' directory at '{}'", DIR_PROJECT_DIP, dip_dir->string()));
-		const auto registry_override = make_registry_override_path(state.dirs, cdep.version);
+		const auto registry_override = make_registry_override_dir_path(state.dirs, cdep.src_version);
 		const auto dep_settings      = read_project_settings_yml(ctx, *dip_dir);
 		const auto registry_path     = get_dep_registry_to_use(ctx, *dip_dir, registry_override);
 		auto ancestry  = make_ancestry(ctx, parent_ancestry, cdep.dep.name);
@@ -719,11 +720,13 @@ auto run_collector(context* ctx, const dip::state& state, const yml_registry& re
 			}
 		}
 		const auto cmake_options     = get_cmake_options_list(ctx, os::get_platform(), state.project_settings.cmake_options, dep.cmake_options);
-		const auto version           = make_version_string(ctx, dep.origin, cmake_options);
-		const auto registry_override = make_registry_override_path(state.dirs, version);
-		ctx->log->detail(pmr_format(ctx, "version: '{}'", version));
-		if (to_acquire(ctx, state, collector, dep.name, version)) {
-			auto acquire_result = acquire(ctx, state, collector, dep, version);
+		const auto src_version       = make_src_version_string(ctx, dep.origin);
+		const auto bld_version       = make_bld_version_string(ctx, dep.origin, cmake_options);
+		const auto registry_override = make_registry_override_dir_path(state.dirs, src_version);
+		ctx->log->detail(pmr_format(ctx, "source version: '{}'", src_version));
+		ctx->log->detail(pmr_format(ctx, "build version: '{}'", bld_version));
+		if (to_acquire(ctx, state, collector, dep.name, src_version)) {
+			auto acquire_result = acquire(ctx, state, collector, dep, src_version);
 			if (acquire_result.md5_update) {
 				result.registry_update.md5_updates.push_back(std::move(*acquire_result.md5_update));
 			}
@@ -733,7 +736,8 @@ auto run_collector(context* ctx, const dip::state& state, const yml_registry& re
 		auto cdep = collected_dep {
 			.dep           = dep,
 			.ancestry      = collector.ancestry,
-			.version       = version,
+			.src_version   = src_version,
+			.bld_version   = bld_version,
 			.cmake_options = cmake_options,
 		};
 		result.collected_deps.push_back(std::move(cdep));
@@ -795,7 +799,8 @@ auto get_all_dep_versions_in_meta_dir(context* ctx, const std::filesystem::path&
 		for (const auto& entry : std::filesystem::directory_iterator{meta_dir}) {
 			if (entry.is_regular_file()) {
 				const auto meta = read_meta_yml(ctx, entry.path());
-				list.push_back(meta.version);
+				list.push_back(meta.bld_version);
+				list.push_back(meta.src_version);
 			}
 		}
 	}
@@ -843,13 +848,8 @@ auto get_versions_to_preserve(context* ctx, std::span<const std::filesystem::pat
 	return sort_and_remove_duplicates(ctx, list);
 }
 
-[[nodiscard]]
-auto do_cache_clean(context* ctx, const dip::args& args) -> int {
-	const auto sys_cache_dir        = os::get_system_cache_dir();
-	const auto cache_dir            = get_cache_dir(sys_cache_dir, args);
-	const auto root_dirs            = get_root_dirs(ctx, sys_cache_dir, args);
-	const auto versions_to_preserve = get_versions_to_preserve(ctx, root_dirs);
-	for (const auto& entry : std::filesystem::directory_iterator{cache_dir}) {
+auto do_cache_clean(context* ctx, const std::filesystem::path& dir_to_clean, std::span<const std::pmr::string> versions_to_preserve) -> void {
+	for (const auto& entry : std::filesystem::directory_iterator{dir_to_clean}) {
 		if (entry.is_directory()) {
 			const auto version = to_string(ctx, entry.path().filename());
 			if (!std::ranges::binary_search(versions_to_preserve, version)) {
@@ -859,6 +859,22 @@ auto do_cache_clean(context* ctx, const dip::args& args) -> int {
 			}
 		}
 	}
+}
+
+[[nodiscard]]
+auto do_cache_clean(context* ctx, const dip::args& args) -> int {
+	const auto sys_cache_dir        = os::get_system_cache_dir();
+	const auto cache_dir            = get_cache_dir(sys_cache_dir, args);
+	const auto reg_override_dir     = make_registry_override_dir_path(cache_dir);
+	const auto bld_dir              = make_bld_dir_path(cache_dir);
+	const auto dl_dir               = make_dl_dir_path(cache_dir);
+	const auto src_dir              = make_src_dir_path(cache_dir);
+	const auto root_dirs            = get_root_dirs(ctx, sys_cache_dir, args);
+	const auto versions_to_preserve = get_versions_to_preserve(ctx, root_dirs);
+	do_cache_clean(ctx, reg_override_dir, versions_to_preserve);
+	do_cache_clean(ctx, bld_dir, versions_to_preserve);
+	do_cache_clean(ctx, dl_dir, versions_to_preserve);
+	do_cache_clean(ctx, src_dir, versions_to_preserve);
 	return exit_success(ctx);
 }
 

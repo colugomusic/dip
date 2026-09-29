@@ -33,23 +33,43 @@ auto make_install_meta_path(const dip::dirs& dirs, std::string_view cfg) -> std:
 }
 
 [[nodiscard]]
-auto make_registry_override_path(const dip::dirs& dirs, std::string_view version) -> std::filesystem::path {
-	return dirs.cache / version / FILENAME_REGISTRY_YML;
+auto make_registry_override_dir_path(const std::filesystem::path& cache) -> std::filesystem::path {
+	return cache / "override";
 }
 
 [[nodiscard]]
-auto make_bld_dir_path(context*, const dip::dirs& dirs, std::string_view version, std::string_view cfg) -> std::filesystem::path {
-	return dirs.cache / version / "bld" / cfg;
+auto make_bld_dir_path(const std::filesystem::path& cache) -> std::filesystem::path {
+	return cache / "bld";
 }
 
 [[nodiscard]]
-auto make_dl_dir_path(context*, const dip::dirs& dirs, std::string_view version) -> std::filesystem::path {
-	return dirs.cache / version / "dl";
+auto make_dl_dir_path(const std::filesystem::path& cache) -> std::filesystem::path {
+	return cache / "dl";
 }
 
 [[nodiscard]]
-auto make_src_dir_path(context*, const dip::dirs& dirs, std::string_view version) -> std::filesystem::path {
-	return dirs.cache / version / "src";
+auto make_src_dir_path(const std::filesystem::path& cache) -> std::filesystem::path {
+	return cache / "src";
+}
+
+[[nodiscard]]
+auto make_registry_override_dir_path(const dip::dirs& dirs, std::string_view src_version) -> std::filesystem::path {
+	return make_registry_override_dir_path(dirs.cache) / src_version / FILENAME_REGISTRY_YML;
+}
+
+[[nodiscard]]
+auto make_bld_dir_path(context*, const dip::dirs& dirs, std::string_view bld_version, std::string_view cfg) -> std::filesystem::path {
+	return make_bld_dir_path(dirs.cache) / bld_version / cfg;
+}
+
+[[nodiscard]]
+auto make_dl_dir_path(context*, const dip::dirs& dirs, std::string_view src_version) -> std::filesystem::path {
+	return make_dl_dir_path(dirs.cache) / src_version;
+}
+
+[[nodiscard]]
+auto make_src_dir_path(context*, const dip::dirs& dirs, std::string_view src_version) -> std::filesystem::path {
+	return make_src_dir_path(dirs.cache) / src_version;
 }
 
 } // dip

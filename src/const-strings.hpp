@@ -69,7 +69,8 @@ static constexpr auto KEY_NAME                 = "name";
 static constexpr auto KEY_PATH                 = "path";
 static constexpr auto KEY_TRACK                = "track";
 static constexpr auto KEY_URL                  = "url";
-static constexpr auto KEY_VERSION              = "version";
+static constexpr auto KEY_BLD_VERSION          = "bld-version";
+static constexpr auto KEY_SRC_VERSION          = "src-version";
 static constexpr auto PROGRAM_NAME             = "dip";
 static constexpr auto PROGRAM_VERSION          = "1.0.0";
 

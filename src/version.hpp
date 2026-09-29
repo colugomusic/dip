@@ -67,11 +67,20 @@ auto to_bytes(context* ctx, const dip::origin& origin) -> std::pmr::vector<std::
 }
 
 [[nodiscard]]
-auto make_version_string(context* ctx, const dip::origin& origin, std::span<const std::pmr::string> cmake_options_list) -> std::pmr::string {
+auto make_bld_version_string(context* ctx, const dip::origin& origin, std::span<const std::pmr::string> cmake_options_list) -> std::pmr::string {
 	const auto options_bytes = to_bytes(ctx, cmake_options_list);
 	const auto origin_bytes  = to_bytes(ctx, origin);
 	auto md5                 = MD5{};
 	md5.add(options_bytes.data(), options_bytes.size());
+	md5.add(origin_bytes.data(), origin_bytes.size());
+	const auto hash = md5.getHash();
+	return std::pmr::string{hash, ctx->mem};
+}
+
+[[nodiscard]]
+auto make_src_version_string(context* ctx, const dip::origin& origin) -> std::pmr::string {
+	const auto origin_bytes  = to_bytes(ctx, origin);
+	auto md5                 = MD5{};
 	md5.add(origin_bytes.data(), origin_bytes.size());
 	const auto hash = md5.getHash();
 	return std::pmr::string{hash, ctx->mem};

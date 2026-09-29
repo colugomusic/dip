@@ -25,7 +25,8 @@ struct yml_registry {
 };
 
 struct yml_meta {
-	std::pmr::string version;
+	std::pmr::string src_version;
+	std::pmr::string bld_version;
 };
 
 [[nodiscard]]
@@ -289,10 +290,12 @@ auto read_meta_yml(context* ctx, const std::filesystem::path& path) -> yml_meta 
 		ctx->log->detail(pmr_format(ctx, "Reading meta info from '{}'", path.string()));
 		if (const auto text = read_file_text(ctx, path)) {
 			const auto node = node_t::deserialize(*text);
-			if (!node.is_mapping())          { throw std::runtime_error{std::format("The meta file must be a mapping, but found '{}'.", fkyaml::to_string(node.get_type()))}; }
-			if (!node.contains(KEY_VERSION)) { throw std::runtime_error{std::format("The meta file must contain a '{}' key.", KEY_VERSION)}; }
+			if (!node.is_mapping())              { throw std::runtime_error{std::format("The meta file must be a mapping, but found '{}'.", fkyaml::to_string(node.get_type()))}; }
+			if (!node.contains(KEY_BLD_VERSION)) { throw std::runtime_error{std::format("The meta file must contain a '{}' key.", KEY_BLD_VERSION)}; }
+			if (!node.contains(KEY_SRC_VERSION)) { throw std::runtime_error{std::format("The meta file must contain a '{}' key.", KEY_SRC_VERSION)}; }
 			return yml_meta{
-				.version = to_pmr_string(ctx, node, KEY_VERSION)
+				.src_version = to_pmr_string(ctx, node, KEY_SRC_VERSION),
+				.bld_version = to_pmr_string(ctx, node, KEY_BLD_VERSION),
 			};
 		}
 		throw std::runtime_error{std::format("Failed to read meta info from '{}'", path.string())};
@@ -370,7 +373,8 @@ auto save_to(context* ctx, const yml_meta& meta, const std::filesystem::path& pa
 	auto tmp_path = path;
 	tmp_path.replace_extension(".tmp");
 	auto root = node_t::mapping_type{};
-	root[KEY_VERSION] = meta.version;
+	root[KEY_BLD_VERSION] = meta.bld_version;
+	root[KEY_SRC_VERSION] = meta.src_version;
 	auto string = node_t::serialize(root);
 	write_text_to_file(tmp_path, string);
 	std::filesystem::rename(tmp_path, path);
