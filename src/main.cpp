@@ -39,6 +39,7 @@ struct collected_dep {
 	std::pmr::vector<std::pmr::string> cmake_options;
 	std::pmr::vector<std::pmr::string> package_names;
 	std::pmr::vector<std::pmr::string> dependencies;
+	size_t position_in_registry = 0;
 };
 
 using collected_deps = std::pmr::vector<collected_dep>;
@@ -703,12 +704,15 @@ auto is_dependency_of(const collected_dep& a, const collected_dep& b) -> bool {
 auto dependency_graph_sort(const collected_dep& a, const collected_dep& b) -> bool {
 	if (is_dependency_of(a, b)) { return true; }
 	if (is_dependency_of(b, a)) { return false; }
+	if (a.position_in_registry < b.position_in_registry) { return true; }
+	if (a.position_in_registry > b.position_in_registry) { return false; }
 	return a.dep.name < b.dep.name;
 }
 
 [[nodiscard]]
 auto run_collector(context* ctx, const dip::state& state, const yml_registry& registry, const dip::collector& collector) -> collector_result {
 	auto result = collector_result{};
+	size_t position_in_registry = 0;
 	for (const auto& name : collector.work_to_do.deps) {
 		ctx->log->detail(pmr_format(ctx, "Collecting dependency '{}'", name));
 		print_and_clear_log(ctx);
@@ -734,11 +738,12 @@ auto run_collector(context* ctx, const dip::state& state, const yml_registry& re
 			remove_if_exists(registry_override);
 		}
 		auto cdep = collected_dep {
-			.dep           = dep,
-			.ancestry      = collector.ancestry,
-			.src_version   = src_version,
-			.bld_version   = bld_version,
-			.cmake_options = cmake_options,
+			.dep                  = dep,
+			.ancestry             = collector.ancestry,
+			.src_version          = src_version,
+			.bld_version          = bld_version,
+			.cmake_options        = cmake_options,
+			.position_in_registry = position_in_registry++,
 		};
 		result.collected_deps.push_back(std::move(cdep));
 	}
