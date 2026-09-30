@@ -696,13 +696,43 @@ auto subcollect(context* ctx, const dip::state& state, const ancestry& parent_an
 }
 
 [[nodiscard]]
-auto is_dependency_of(const collected_dep& a, const collected_dep& b) -> bool {
-	return std::ranges::find(b.dependencies, a.dep.name) != std::cend(b.dependencies);
+auto find_cdep(std::span<const collected_dep> cdeps, std::string_view name) -> const collected_dep* {
+	const auto fn_pred = [name](const collected_dep& cdep) { return cdep.dep.name == name; };
+	if (const auto pos = std::ranges::find_if(cdeps, fn_pred); pos != std::cend(cdeps)) {
+		return &*pos;
+	}
+	return nullptr;
 }
 
 [[nodiscard]]
-auto fn_dependency_graph_sort(context* ctx) {
-	return [ctx](const collected_dep& a, const collected_dep& b) -> bool {
+auto is_dependency_of(std::string_view is_this_a_dep, const collected_dep& of_this, std::span<const collected_dep> all_cdeps) -> bool {
+	auto fn = [all_cdeps, name_to_find = is_this_a_dep](std::string_view name) {
+		if (name == name_to_find) {
+			return true;
+		}
+		const auto cdep = find_cdep(all_cdeps, name);
+		assert (cdep);
+		return is_dependency_of(name_to_find, *cdep, all_cdeps);
+	};
+	return std::ranges::any_of(of_this.dependencies, fn);
+}
+
+[[nodiscard]]
+auto is_dependency_of(const collected_dep& is_this_a_dep, const collected_dep& of_this, std::span<const collected_dep> all_cdeps) -> bool {
+	return is_dependency_of(is_this_a_dep.dep.name, of_this, all_cdeps);
+}
+
+[[nodiscard]]
+auto fn_is_dependency_of(std::span<const collected_dep> all_cdeps) {
+	return [all_cdeps](const collected_dep& a, const collected_dep& b) -> bool {
+		return is_dependency_of(a, b, all_cdeps);
+	};
+}
+
+[[nodiscard]]
+auto fn_dependency_graph_sort(context* ctx, collected_deps all_cdeps) {
+	return [ctx, all_cdeps](const collected_dep& a, const collected_dep& b) -> bool {
+		const auto is_dependency_of = fn_is_dependency_of(all_cdeps);
 		if (is_dependency_of(a, b)) { return true; }
 		if (is_dependency_of(b, a)) { return false; }
 		const auto parent_a = get_parent(ctx, a.ancestry);
@@ -899,7 +929,7 @@ auto do_dip(context* ctx, const dip::args& args) -> int {
 			auto registry            = get_initial_registry(ctx, state.project_settings, args.project_dir.v, *dip_dir, args.install_self.v);
 			auto collector           = init_collector(ctx, no_ancestry, registry, state.work_requested);
 			auto collector_result    = run_collector(ctx, state, registry, collector);
-			std::ranges::sort(collector_result.collected_deps, fn_dependency_graph_sort(ctx));
+			std::ranges::sort(collector_result.collected_deps, fn_dependency_graph_sort(ctx, collector_result.collected_deps));
 			if (save_registry) {
 				apply(&registry, collector_result.registry_update);
 				save_to(ctx, registry, *dip_dir / FILENAME_REGISTRY_YML);
