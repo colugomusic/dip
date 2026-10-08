@@ -466,7 +466,7 @@ auto update_track_commit(context* ctx, const dip::dep& dep, const dip::state& st
 	const auto new_hash = get_latest_git_commit_hash(ctx, state.prog_paths, git.url, git.branch);
 	ctx->log->detail(pmr_format(ctx, "Latest commit is '{}'", new_hash));
 	if (new_hash != git.commit) {
-		ctx->log->dep_task(decorate(ctx, collector.ancestry, dep.name), pmr_format(ctx, "Updating commit to '{}'", git.commit));
+		ctx->log->dep_task(decorate(ctx, collector.ancestry, dep.name), pmr_format(ctx, "Updating commit to '{}'", new_hash));
 		return commit_update{.name = dep.name, .new_commit = new_hash};
 	}
 	ctx->log->detail("commit is already at latest");
